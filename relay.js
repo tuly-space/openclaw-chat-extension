@@ -77,15 +77,30 @@ export function setFollowMode(v) { followMode = v }
 let statusCallback = null
 export function onRelayStatus(cb) { statusCallback = cb }
 
-function broadcastStatus() {
+async function getActiveTabTitle() {
+  try {
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+    return active?.title || active?.url || null
+  } catch { return null }
+}
+
+async function broadcastStatus() {
   const attachedTabs = []
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') attachedTabs.push(tabId)
+  }
+  let tabTitle = null
+  if (followMode && attachedTabs.length > 0) {
+    try {
+      const tab = await chrome.tabs.get(attachedTabs[0])
+      tabTitle = tab.title || tab.url || null
+    } catch {}
   }
   statusCallback?.({
     connected: !!(relayWs && relayWs.readyState === WebSocket.OPEN),
     attachedTabs,
     followMode,
+    tabTitle,
   })
 }
 
@@ -135,7 +150,7 @@ export async function ensureRelayConnection(port, gatewayToken) {
   try {
     await relayConnectPromise
     reconnectAttempt = 0
-    broadcastStatus()
+    void broadcastStatus()
   } finally {
     relayConnectPromise = null
   }
@@ -151,7 +166,7 @@ function onRelayClosed(reason) {
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') setBadge(tabId, 'connecting')
   }
-  broadcastStatus()
+  void broadcastStatus()
   scheduleReconnect()
 }
 
@@ -256,7 +271,7 @@ async function reannounceAttachedTabs() {
     }
   }
   await persistState()
-  broadcastStatus()
+  void broadcastStatus()
 }
 
 // ─── Relay send ───────────────────────────────────────────────────────────────
@@ -419,7 +434,7 @@ async function attachTab(tabId, opts = {}) {
 
   setBadge(tabId, 'on')
   await persistState()
-  broadcastStatus()
+  void broadcastStatus()
   return { sessionId, targetId }
 }
 
@@ -439,7 +454,7 @@ async function detachTab(tabId, reason) {
   setBadge(tabId, 'off')
   void chrome.action.setTitle({ tabId, title: 'OpenClaw Chat (click to open)' })
   await persistState()
-  broadcastStatus()
+  void broadcastStatus()
 }
 
 // ─── Toggle attach on active tab ──────────────────────────────────────────────
@@ -452,7 +467,7 @@ export async function toggleRelayOnActiveTab(port, gatewayToken) {
     for (const [tabId] of [...tabs.entries()]) {
       try { await detachTab(tabId, 'follow-mode-off') } catch {}
     }
-    broadcastStatus()
+    void broadcastStatus()
     return { ok: true, attached: false }
   }
 
@@ -483,7 +498,7 @@ export async function toggleRelayOnActiveTab(port, gatewayToken) {
 
     await attachTab(tabId)
     followMode = true
-    broadcastStatus()
+    void broadcastStatus()
     return { ok: true, attached: true }
   } catch (e) {
     tabs.delete(tabId)
@@ -626,7 +641,7 @@ export async function onTabActivated(tabId) {
       }
     }
     // broadcastStatus after detach → UI shows "connecting" briefly
-    broadcastStatus()
+    void broadcastStatus()
 
     // Small yield so the side panel renders the connecting state
     await new Promise(r => setTimeout(r, 80))
@@ -640,7 +655,7 @@ export async function onTabActivated(tabId) {
           // attachTab calls broadcastStatus → UI shows "on"
         } catch (e) {
           console.warn('follow-mode attach failed:', e.message)
-          broadcastStatus()
+          void broadcastStatus()
         } finally {
           tabOperationLocks.delete(tabId)
         }
@@ -656,6 +671,11 @@ export async function onTabActivated(tabId) {
   }
 }
 
+export function onTabTitleChanged(tabId) {
+  const tab = tabs.get(tabId)
+  if (tab?.state === 'connected') void broadcastStatus()
+}
+
 export async function relayKeepalive(port, gatewayToken) {
   if (tabs.size === 0) return
   for (const [tabId, tab] of tabs.entries()) {
@@ -666,5 +686,5 @@ export async function relayKeepalive(port, gatewayToken) {
       await ensureRelayConnection(port, gatewayToken).catch(() => { if (!reconnectTimer) scheduleReconnect() })
     }
   }
-  broadcastStatus()
+  void broadcastStatus()
 }

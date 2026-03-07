@@ -135,6 +135,9 @@ chrome.debugger.onDetach.addListener((source, reason) => relay.onDebuggerDetach(
 chrome.tabs.onRemoved.addListener((tabId) => relay.onTabRemoved(tabId))
 chrome.tabs.onReplaced.addListener((addedId, removedId) => relay.onTabReplaced(addedId, removedId))
 chrome.tabs.onActivated.addListener(({ tabId }) => relay.onTabActivated(tabId))
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.title || changeInfo.status === 'complete') relay.onTabTitleChanged(tabId)
+})
 
 chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => {
   if (frameId === 0) relay.onWebNavCompleted(tabId)

@@ -42,8 +42,10 @@ const $typing     = document.getElementById("typing-indicator");
 const $inputMsg   = document.getElementById("input-msg");
 const $btnSend    = document.getElementById("btn-send");
 const $btnSettings= document.getElementById("btn-settings");
-const $btnRelay   = document.getElementById("btn-relay");
-const $relayDot   = document.getElementById("relay-dot");
+const $btnRelay      = document.getElementById("btn-relay");
+const $relayDot      = document.getElementById("relay-dot");
+const $relayTabBar   = document.getElementById("relay-tab-bar");
+const $relayTabTitle = document.getElementById("relay-tab-title");
 const $btnNew     = document.getElementById("btn-new");
 const $btnSaveSettings = document.getElementById("btn-save-settings");
 const $btnCancelSettings = document.getElementById("btn-cancel-settings");
@@ -267,6 +269,15 @@ function subscribeRelayStatus() {
       $btnRelay.title = msg.followMode
         ? 'Relay ON — following active tab (click to stop)'
         : 'Enable relay — will follow active tab';
+
+      // Tab title bar
+      if (msg.followMode && msg.tabTitle) {
+        $relayTabTitle.textContent = msg.tabTitle;
+        $relayTabBar.classList.remove('hidden');
+      } else {
+        $relayTabBar.classList.add('hidden');
+        $relayTabTitle.textContent = '';
+      }
     }
   });
   port.onDisconnect.addListener(() => {

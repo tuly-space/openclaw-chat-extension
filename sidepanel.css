@@ -302,6 +302,32 @@ html, body {
   40% { transform: scale(1); opacity: 1; }
 }
 
+/* Relay tab title bar */
+#relay-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: rgba(255, 90, 54, 0.08);
+  border-bottom: 1px solid rgba(255, 90, 54, 0.15);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-height: 0;
+  overflow: hidden;
+}
+
+#relay-tab-favicon {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+#relay-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
 /* Relay button */
 .relay-btn {
   display: flex;
