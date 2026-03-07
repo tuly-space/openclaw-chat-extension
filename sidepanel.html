@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw Chat</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <!-- Header -->
+  <div id="header">
+    <div id="header-title">
+      <span id="status-dot" class="dot disconnected"></span>
+      <span id="header-name">OpenClaw</span>
+    </div>
+    <div id="header-actions">
+      <button id="btn-new" class="icon-btn" title="New session">/new</button>
+      <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
+    </div>
+  </div>
+
+  <!-- Connection error banner -->
+  <div id="error-banner" class="hidden">
+    <span id="error-text"></span>
+    <button id="btn-retry">Retry</button>
+  </div>
+
+  <!-- Settings panel (hidden by default) -->
+  <div id="settings-panel" class="hidden">
+    <div class="settings-row">
+      <label>Gateway URL</label>
+      <input id="input-url" type="text" placeholder="ws://127.0.0.1:18789" />
+    </div>
+    <div class="settings-row">
+      <label>Gateway Token</label>
+      <input id="input-token" type="password" placeholder="paste token here" />
+    </div>
+    <div class="settings-row">
+      <label>Agent ID</label>
+      <input id="input-agent" type="text" placeholder="main" />
+    </div>
+    <div class="settings-actions">
+      <button id="btn-save-settings">Save &amp; Connect</button>
+      <button id="btn-cancel-settings">Cancel</button>
+    </div>
+    <div class="settings-hint">
+      Token: run <code>openclaw gateway status</code> to find it.<br/>
+      Device key is auto-generated and stored locally.
+    </div>
+  </div>
+
+  <!-- Chat messages -->
+  <div id="messages"></div>
+
+  <!-- Typing indicator -->
+  <div id="typing-indicator" class="hidden">
+    <span class="dot-pulse"></span>
+    <span class="dot-pulse"></span>
+    <span class="dot-pulse"></span>
+  </div>
+
+  <!-- Input area -->
+  <div id="input-area">
+    <textarea
+      id="input-msg"
+      placeholder="Message OpenClaw…"
+      rows="1"
+      maxlength="32000"
+    ></textarea>
+    <button id="btn-send" disabled>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M1.5 1.5l13 6.5-13 6.5v-5l9-1.5-9-1.5z"/>
+      </svg>
+    </button>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

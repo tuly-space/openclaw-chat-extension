@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "OpenClaw Chat",
+  "description": "Chat side panel connected to your local OpenClaw gateway",
+  "version": "0.1.0",
+  "permissions": [
+    "storage",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:18789/*",
+    "http://localhost:18789/*"
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_title": "OpenClaw Chat",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
