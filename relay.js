@@ -625,6 +625,11 @@ export async function onTabActivated(tabId) {
         await detachTab(attachedTabId, 'follow-mode-switch')
       }
     }
+    // broadcastStatus after detach → UI shows "connecting" briefly
+    broadcastStatus()
+
+    // Small yield so the side panel renders the connecting state
+    await new Promise(r => setTimeout(r, 80))
 
     // Attach to new tab if not already attached
     if (!tabs.has(tabId) || tabs.get(tabId).state !== 'connected') {
@@ -632,8 +637,10 @@ export async function onTabActivated(tabId) {
         tabOperationLocks.add(tabId)
         try {
           await attachTab(tabId)
+          // attachTab calls broadcastStatus → UI shows "on"
         } catch (e) {
           console.warn('follow-mode attach failed:', e.message)
+          broadcastStatus()
         } finally {
           tabOperationLocks.delete(tabId)
         }

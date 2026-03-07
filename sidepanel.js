@@ -256,13 +256,16 @@ function subscribeRelayStatus() {
   const port = chrome.runtime.connect({ name: 'relay-status' });
   port.onMessage.addListener((msg) => {
     if (msg.type === 'RELAY_STATUS') {
-      const state = !msg.connected ? 'off'
-        : msg.followMode && msg.attachedTabs > 0 ? 'on'
-        : msg.followMode ? 'connecting'
-        : 'off';
+      const hasAttached = Array.isArray(msg.attachedTabs)
+        ? msg.attachedTabs.length > 0
+        : msg.attachedTabs > 0;
+      const state = !msg.followMode ? 'off'
+        : !msg.connected ? 'connecting'
+        : hasAttached ? 'on'
+        : 'connecting';
       setRelayStatus(state);
       $btnRelay.title = msg.followMode
-        ? `Relay ON — following active tab (click to stop)`
+        ? 'Relay ON — following active tab (click to stop)'
         : 'Enable relay — will follow active tab';
     }
   });
