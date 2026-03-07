@@ -42,12 +42,15 @@ const $typing     = document.getElementById("typing-indicator");
 const $inputMsg   = document.getElementById("input-msg");
 const $btnSend    = document.getElementById("btn-send");
 const $btnSettings= document.getElementById("btn-settings");
+const $btnRelay   = document.getElementById("btn-relay");
+const $relayDot   = document.getElementById("relay-dot");
 const $btnNew     = document.getElementById("btn-new");
 const $btnSaveSettings = document.getElementById("btn-save-settings");
 const $btnCancelSettings = document.getElementById("btn-cancel-settings");
 const $inputUrl   = document.getElementById("input-url");
 const $inputToken = document.getElementById("input-token");
 const $inputAgent = document.getElementById("input-agent");
+const $inputRelayPort = document.getElementById("input-relay-port");
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -239,11 +242,37 @@ async function testConnection(s) {
 
 // ─── Settings panel ───────────────────────────────────────────────────────────
 
+// ─── Relay UI ────────────────────────────────────────────────────────────────
+
+function setRelayStatus(state) {
+  $relayDot.className = `relay-indicator ${state}`;
+  $btnRelay.title = state === 'on'
+    ? 'Relay ON — click to detach'
+    : state === 'connecting' ? 'Relay connecting…'
+    : 'Toggle browser relay on current tab';
+}
+
+function subscribeRelayStatus() {
+  const port = chrome.runtime.connect({ name: 'relay-status' });
+  port.onMessage.addListener((msg) => {
+    if (msg.type === 'RELAY_STATUS') {
+      const state = !msg.connected ? 'off'
+        : msg.attachedTabs > 0 ? 'on'
+        : 'connecting';
+      setRelayStatus(state);
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    setTimeout(subscribeRelayStatus, 2000);
+  });
+}
+
 async function openSettings() {
   const s = await loadSettings();
   $inputUrl.value = s.gatewayUrl;
   $inputToken.value = s.token;
   $inputAgent.value = s.agentId;
+  $inputRelayPort.value = s.relayPort || 18792;
   $settingsPanel.classList.remove("hidden");
   settingsOpen = true;
   if (!s.token) $inputToken.focus();
@@ -259,6 +288,7 @@ async function saveAndConnect() {
     gatewayUrl: $inputUrl.value.trim() || DEFAULT_SETTINGS.gatewayUrl,
     token: $inputToken.value.trim(),
     agentId: $inputAgent.value.trim() || "main",
+    relayPort: parseInt($inputRelayPort.value) || 18792,
   };
   if (!s.token) { $inputToken.focus(); return; }
   await saveSettings(s);
@@ -325,6 +355,16 @@ $btnNew.addEventListener("click", () => {
   appendMessageEl("system", "— new conversation —");
 });
 
+$btnRelay.addEventListener("click", async () => {
+  setRelayStatus("connecting");
+  const result = await chrome.runtime.sendMessage({ type: "RELAY_TOGGLE" });
+  if (!result?.ok) {
+    setRelayStatus("error");
+    showError(result?.error || "Relay toggle failed");
+    setTimeout(() => { hideError(); setRelayStatus("off"); }, 3000);
+  }
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && isStreaming) stopStreaming();
 });
@@ -332,3 +372,4 @@ document.addEventListener("keydown", (e) => {
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
 init();
+subscribeRelayStatus();

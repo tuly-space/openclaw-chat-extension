@@ -302,6 +302,25 @@ html, body {
   40% { transform: scale(1); opacity: 1; }
 }
 
+/* Relay button */
+.relay-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.relay-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.relay-indicator.off { background: var(--text-dim); }
+.relay-indicator.connecting { background: #f5a623; animation: pulse 1s infinite; }
+.relay-indicator.on { background: #FF5A36; }
+.relay-indicator.error { background: var(--error); }
+
 /* Input area */
 #input-area {
   display: flex;

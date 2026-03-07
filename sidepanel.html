@@ -14,6 +14,10 @@
       <span id="header-name">OpenClaw</span>
     </div>
     <div id="header-actions">
+      <button id="btn-relay" class="icon-btn relay-btn" title="Toggle browser relay on current tab">
+        <span id="relay-dot" class="relay-indicator off"></span>
+        Relay
+      </button>
       <button id="btn-new" class="icon-btn" title="New session">/new</button>
       <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
     </div>
@@ -29,7 +33,7 @@
   <div id="settings-panel" class="hidden">
     <div class="settings-row">
       <label>Gateway URL</label>
-      <input id="input-url" type="text" placeholder="ws://127.0.0.1:18789" />
+      <input id="input-url" type="text" placeholder="https://dash.tuly.space" />
     </div>
     <div class="settings-row">
       <label>Gateway Token</label>
@@ -39,13 +43,17 @@
       <label>Agent ID</label>
       <input id="input-agent" type="text" placeholder="main" />
     </div>
+    <div class="settings-row">
+      <label>Relay Port</label>
+      <input id="input-relay-port" type="number" placeholder="18792" min="1" max="65535" />
+    </div>
     <div class="settings-actions">
       <button id="btn-save-settings">Save &amp; Connect</button>
       <button id="btn-cancel-settings">Cancel</button>
     </div>
     <div class="settings-hint">
-      Token: run <code>openclaw gateway status</code> to find it.<br/>
-      Device key is auto-generated and stored locally.
+      Token: <code>openclaw gateway status</code><br/>
+      Relay requires OpenClaw node host running locally.
     </div>
   </div>
 
