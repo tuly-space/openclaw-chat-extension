@@ -70,8 +70,21 @@ let reconnectAttempt = 0
 let reconnectTimer = null
 
 // Auto-follow mode: relay follows the active tab automatically
+// Persisted in chrome.storage.session to survive SW restarts
 let followMode = false
-export function setFollowMode(v) { followMode = v }
+
+async function setFollowMode(v) {
+  followMode = v
+  try { await chrome.storage.session.set({ relayFollowMode: v }) } catch {}
+}
+
+export async function restoreFollowMode() {
+  try {
+    const s = await chrome.storage.session.get('relayFollowMode')
+    followMode = !!s.relayFollowMode
+  } catch {}
+  return followMode
+}
 
 // Status broadcast to side panel
 let statusCallback = null
@@ -225,6 +238,8 @@ async function persistState() {
 }
 
 export async function rehydrateRelayState() {
+  // Restore follow mode from session storage (survives SW restart)
+  await restoreFollowMode()
   try {
     const stored = await chrome.storage.session.get(['persistedTabs', 'nextSession'])
     if (stored.nextSession) nextSession = Math.max(nextSession, stored.nextSession)
@@ -459,11 +474,26 @@ async function detachTab(tabId, reason) {
 
 // ─── Toggle attach on active tab ──────────────────────────────────────────────
 
+/** Find the best browsable active tab across all windows */
+async function findBrowsableActiveTab() {
+  // Try lastFocusedWindow first
+  let candidates = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+  const browsable = candidates.filter(t =>
+    t.id && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://')
+  )
+  if (browsable.length > 0) return browsable[0]
+
+  // Fall back: any active tab across all windows
+  const all = await chrome.tabs.query({ active: true })
+  return all.find(t =>
+    t.id && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('chrome-extension://')
+  ) || null
+}
+
 export async function toggleRelayOnActiveTab(port, gatewayToken) {
-  // Toggle follow mode
+  // Toggle follow mode off
   if (followMode) {
-    // Turn off: detach all tabs and disable follow mode
-    followMode = false
+    await setFollowMode(false)
     for (const [tabId] of [...tabs.entries()]) {
       try { await detachTab(tabId, 'follow-mode-off') } catch {}
     }
@@ -471,10 +501,10 @@ export async function toggleRelayOnActiveTab(port, gatewayToken) {
     return { ok: true, attached: false }
   }
 
-  // Turn on: connect relay and attach current tab with follow mode
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-  const tabId = active?.id
-  if (!tabId) return { ok: false, error: 'No active tab' }
+  // Turn on: connect relay and attach current browsable tab
+  const active = await findBrowsableActiveTab()
+  if (!active?.id) return { ok: false, error: 'No browsable tab found' }
+  const tabId = active.id
 
   _scheduleReconnectPort = port
   _scheduleReconnectToken = gatewayToken
@@ -489,15 +519,8 @@ export async function toggleRelayOnActiveTab(port, gatewayToken) {
   tabOperationLocks.add(tabId)
 
   try {
-    try {
-      const tab = await chrome.tabs.get(tabId)
-      if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
-        return { ok: false, error: 'Cannot attach to browser internal pages' }
-      }
-    } catch { return { ok: false, error: 'No active tab' } }
-
     await attachTab(tabId)
-    followMode = true
+    await setFollowMode(true)
     void broadcastStatus()
     return { ok: true, attached: true }
   } catch (e) {
@@ -626,10 +649,12 @@ export function onWebNavCompleted(tabId) {
 export async function onTabActivated(tabId) {
   // Auto-follow: detach all other tabs, attach to the newly active one
   if (followMode && relayWs && relayWs.readyState === WebSocket.OPEN) {
-    // Skip chrome:// and extension pages
+    // Skip chrome:// and extension pages (e.g. side panel window's own tab)
     try {
       const tab = await chrome.tabs.get(tabId)
-      if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
+      const url = tab.url || ''
+      if (!url || url.startsWith('chrome://') || url.startsWith('chrome-extension://') ||
+          url.startsWith('about:') || url === 'chrome://newtab/') {
         return
       }
     } catch { return }
