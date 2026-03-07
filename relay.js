@@ -69,6 +69,10 @@ const reattachPending = new Set()
 let reconnectAttempt = 0
 let reconnectTimer = null
 
+// Auto-follow mode: relay follows the active tab automatically
+let followMode = false
+export function setFollowMode(v) { followMode = v }
+
 // Status broadcast to side panel
 let statusCallback = null
 export function onRelayStatus(cb) { statusCallback = cb }
@@ -81,6 +85,7 @@ function broadcastStatus() {
   statusCallback?.({
     connected: !!(relayWs && relayWs.readyState === WebSocket.OPEN),
     attachedTabs,
+    followMode,
   })
 }
 
@@ -440,41 +445,49 @@ async function detachTab(tabId, reason) {
 // ─── Toggle attach on active tab ──────────────────────────────────────────────
 
 export async function toggleRelayOnActiveTab(port, gatewayToken) {
+  // Toggle follow mode
+  if (followMode) {
+    // Turn off: detach all tabs and disable follow mode
+    followMode = false
+    for (const [tabId] of [...tabs.entries()]) {
+      try { await detachTab(tabId, 'follow-mode-off') } catch {}
+    }
+    broadcastStatus()
+    return { ok: true, attached: false }
+  }
+
+  // Turn on: connect relay and attach current tab with follow mode
   const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
   const tabId = active?.id
   if (!tabId) return { ok: false, error: 'No active tab' }
+
+  _scheduleReconnectPort = port
+  _scheduleReconnectToken = gatewayToken
+
+  try {
+    await ensureRelayConnection(port, gatewayToken)
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
 
   if (tabOperationLocks.has(tabId)) return { ok: false, error: 'Operation in progress' }
   tabOperationLocks.add(tabId)
 
   try {
-    if (reattachPending.has(tabId)) {
-      reattachPending.delete(tabId)
-      setBadge(tabId, 'off')
-      return { ok: true, attached: false }
-    }
-
-    const existing = tabs.get(tabId)
-    if (existing?.state === 'connected') {
-      await detachTab(tabId, 'toggle')
-      return { ok: true, attached: false }
-    }
-
-    cancelRelayReconnect()
-    tabs.set(tabId, { state: 'connecting' })
-    setBadge(tabId, 'connecting')
-
     try {
-      _scheduleReconnectPort = port
-      _scheduleReconnectToken = gatewayToken
-      await ensureRelayConnection(port, gatewayToken)
-      await attachTab(tabId)
-      return { ok: true, attached: true }
-    } catch (e) {
-      tabs.delete(tabId)
-      setBadge(tabId, 'error')
-      return { ok: false, error: e.message }
-    }
+      const tab = await chrome.tabs.get(tabId)
+      if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
+        return { ok: false, error: 'Cannot attach to browser internal pages' }
+      }
+    } catch { return { ok: false, error: 'No active tab' } }
+
+    await attachTab(tabId)
+    followMode = true
+    broadcastStatus()
+    return { ok: true, attached: true }
+  } catch (e) {
+    tabs.delete(tabId)
+    return { ok: false, error: e.message }
   } finally {
     tabOperationLocks.delete(tabId)
   }
@@ -595,7 +608,41 @@ export function onWebNavCompleted(tabId) {
   }
 }
 
-export function onTabActivated(tabId) {
+export async function onTabActivated(tabId) {
+  // Auto-follow: detach all other tabs, attach to the newly active one
+  if (followMode && relayWs && relayWs.readyState === WebSocket.OPEN) {
+    // Skip chrome:// and extension pages
+    try {
+      const tab = await chrome.tabs.get(tabId)
+      if (tab.url?.startsWith('chrome://') || tab.url?.startsWith('chrome-extension://')) {
+        return
+      }
+    } catch { return }
+
+    // Detach any currently attached tabs (except the new one)
+    for (const [attachedTabId, tabState] of tabs.entries()) {
+      if (attachedTabId !== tabId && tabState.state === 'connected') {
+        await detachTab(attachedTabId, 'follow-mode-switch')
+      }
+    }
+
+    // Attach to new tab if not already attached
+    if (!tabs.has(tabId) || tabs.get(tabId).state !== 'connected') {
+      if (!tabOperationLocks.has(tabId)) {
+        tabOperationLocks.add(tabId)
+        try {
+          await attachTab(tabId)
+        } catch (e) {
+          console.warn('follow-mode attach failed:', e.message)
+        } finally {
+          tabOperationLocks.delete(tabId)
+        }
+      }
+    }
+    return
+  }
+
+  // No follow mode: just refresh badge
   const tab = tabs.get(tabId)
   if (tab?.state === 'connected') {
     setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')

@@ -257,9 +257,13 @@ function subscribeRelayStatus() {
   port.onMessage.addListener((msg) => {
     if (msg.type === 'RELAY_STATUS') {
       const state = !msg.connected ? 'off'
-        : msg.attachedTabs > 0 ? 'on'
-        : 'connecting';
+        : msg.followMode && msg.attachedTabs > 0 ? 'on'
+        : msg.followMode ? 'connecting'
+        : 'off';
       setRelayStatus(state);
+      $btnRelay.title = msg.followMode
+        ? `Relay ON — following active tab (click to stop)`
+        : 'Enable relay — will follow active tab';
     }
   });
   port.onDisconnect.addListener(() => {
