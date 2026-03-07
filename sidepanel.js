@@ -80,6 +80,22 @@ function updateSendButton() {
 
 // ─── Message rendering ────────────────────────────────────────────────────────
 
+// ─── Markdown rendering ───────────────────────────────────────────────────────
+
+const md = (typeof marked !== "undefined")
+  ? marked.use({ gfm: true, breaks: true }) || marked
+  : null;
+
+function renderMarkdown(text) {
+  if (!md) return escapeHtml(text).replace(/\n/g, "<br>");
+  try { return marked.parse(text); } catch { return escapeHtml(text); }
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+          .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
 function appendMessageEl(role, text, { streaming = false } = {}) {
   const wrap = document.createElement("div");
   wrap.className = `message ${role}`;
@@ -94,9 +110,15 @@ function appendMessageEl(role, text, { streaming = false } = {}) {
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
   if (streaming) bubble.classList.add("streaming-cursor");
-  bubble.textContent = text;
-  wrap.appendChild(bubble);
 
+  if (role === "assistant") {
+    bubble.classList.add("markdown");
+    bubble.innerHTML = renderMarkdown(text);
+  } else {
+    bubble.textContent = text;
+  }
+
+  wrap.appendChild(bubble);
   $messages.appendChild(wrap);
   scrollBottom();
   return bubble;
@@ -164,7 +186,7 @@ async function sendMessage() {
       case "DELTA":
         assistantText += msg.delta;
         if (streamingBubble) {
-          streamingBubble.textContent = assistantText;
+          streamingBubble.innerHTML = renderMarkdown(assistantText);
           scrollBottom();
         }
         break;
@@ -177,6 +199,7 @@ async function sendMessage() {
       case "ABORTED":
         if (streamingBubble) streamingBubble.classList.remove("streaming-cursor");
         if (!assistantText) appendMessageEl("system", "— stopped —");
+        if (streamingBubble) { streamingBubble.innerHTML = renderMarkdown(assistantText); }
         finishStreaming();
         break;
 
@@ -184,7 +207,7 @@ async function sendMessage() {
         setTyping(false);
         if (streamingBubble) {
           streamingBubble.classList.remove("streaming-cursor");
-          streamingBubble.textContent = assistantText || "";
+          streamingBubble.innerHTML = renderMarkdown(assistantText || "");
         }
         appendMessageEl("error", `Error: ${msg.message}`);
         showError(msg.message);
