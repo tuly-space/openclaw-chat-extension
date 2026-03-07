@@ -80,14 +80,45 @@ function updateSendButton() {
 
 // ─── Message rendering ────────────────────────────────────────────────────────
 
+// ─── Theme ────────────────────────────────────────────────────────────────────
+
+const $hljsTheme = document.getElementById("hljs-theme");
+const $btnTheme  = document.getElementById("btn-theme");
+let isDark = localStorage.getItem("oc_theme") !== "light";
+
+function applyTheme(dark) {
+  isDark = dark;
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  $hljsTheme.href = dark ? "hljs-dark.css" : "hljs-light.css";
+  $btnTheme.textContent = dark ? "🌙" : "☀️";
+  localStorage.setItem("oc_theme", dark ? "dark" : "light");
+}
+
+$btnTheme.addEventListener("click", () => applyTheme(!isDark));
+applyTheme(isDark); // boot
+
 // ─── Markdown rendering ───────────────────────────────────────────────────────
 
-const md = (typeof marked !== "undefined")
-  ? marked.use({ gfm: true, breaks: true }) || marked
-  : null;
+if (typeof marked !== "undefined") {
+  marked.use({
+    gfm: true,
+    breaks: true,
+    renderer: (() => {
+      const r = new marked.Renderer();
+      r.code = ({ text, lang }) => {
+        const validLang = lang && hljs?.getLanguage?.(lang) ? lang : null;
+        const highlighted = validLang
+          ? hljs.highlight(text, { language: validLang }).value
+          : (typeof hljs !== "undefined" ? hljs.highlightAuto(text).value : escapeHtml(text));
+        return `<pre><code class="hljs${validLang ? ` language-${validLang}` : ''}">${highlighted}</code></pre>`;
+      };
+      return r;
+    })(),
+  });
+}
 
 function renderMarkdown(text) {
-  if (!md) return escapeHtml(text).replace(/\n/g, "<br>");
+  if (typeof marked === "undefined") return escapeHtml(text).replace(/\n/g, "<br>");
   try { return marked.parse(text); } catch { return escapeHtml(text); }
 }
 

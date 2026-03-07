@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OpenClaw Chat</title>
   <link rel="stylesheet" href="sidepanel.css" />
+  <link rel="stylesheet" id="hljs-theme" href="hljs-dark.css" />
 </head>
 <body>
   <!-- Header -->
@@ -18,6 +19,7 @@
         <span id="relay-dot" class="relay-indicator off"></span>
         Relay
       </button>
+      <button id="btn-theme" class="icon-btn" title="Toggle light/dark">🌙</button>
       <button id="btn-new" class="icon-btn" title="New session">/new</button>
       <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
     </div>
@@ -89,6 +91,7 @@
   </div>
 
   <script src="marked.min.js"></script>
+  <script src="highlight.min.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
