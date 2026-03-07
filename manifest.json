@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "OpenClaw Chat",
-  "description": "Chat side panel connected to your local OpenClaw gateway",
-  "version": "0.1.0",
+  "description": "Chat side panel connected to your OpenClaw gateway",
+  "version": "0.2.0",
   "permissions": [
     "storage",
     "sidePanel"
   ],
   "host_permissions": [
+    "https://*/*",
     "http://127.0.0.1:18789/*",
     "http://localhost:18789/*"
   ],
