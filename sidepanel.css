@@ -424,7 +424,7 @@ html, body {
 }
 
 .message-bubble.markdown p {
-  margin: 0 0 0.6em;
+  margin: 0 0 0.3em;
 }
 .message-bubble.markdown p:last-child { margin-bottom: 0; }
 
@@ -432,7 +432,7 @@ html, body {
 .message-bubble.markdown h2,
 .message-bubble.markdown h3,
 .message-bubble.markdown h4 {
-  margin: 0.8em 0 0.3em;
+  margin: 0.4em 0 0.15em;
   font-weight: 600;
   line-height: 1.3;
 }
@@ -442,10 +442,10 @@ html, body {
 
 .message-bubble.markdown ul,
 .message-bubble.markdown ol {
-  margin: 0.4em 0;
+  margin: 0.15em 0;
   padding-left: 1.4em;
 }
-.message-bubble.markdown li { margin: 0.15em 0; }
+.message-bubble.markdown li { margin: 0.05em 0; }
 
 .message-bubble.markdown code {
   font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
@@ -462,7 +462,7 @@ html, body {
   border-radius: 8px;
   padding: 10px 12px;
   overflow-x: auto;
-  margin: 0.5em 0;
+  margin: 0.3em 0;
   position: relative;
 }
 
@@ -476,7 +476,7 @@ html, body {
 
 .message-bubble.markdown blockquote {
   border-left: 3px solid var(--accent);
-  margin: 0.4em 0;
+  margin: 0.15em 0;
   padding: 0.2em 0.8em;
   color: var(--text-dim);
   font-style: italic;
@@ -485,7 +485,7 @@ html, body {
 .message-bubble.markdown table {
   border-collapse: collapse;
   width: 100%;
-  margin: 0.5em 0;
+  margin: 0.3em 0;
   font-size: 0.85em;
 }
 .message-bubble.markdown th,
