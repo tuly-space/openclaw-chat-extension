@@ -443,7 +443,7 @@ html, body {
 
 .message-bubble.markdown ul,
 .message-bubble.markdown ol {
-  margin: 0.15em 0;
+  margin: 0.6em 0;
   padding-left: 1.4em;
 }
 .message-bubble.markdown li { margin: 0.05em 0; }
