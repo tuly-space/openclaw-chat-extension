@@ -379,7 +379,7 @@ html, body {
   resize: none;
   outline: none;
   min-height: calc(3 * 1.5em + 12px);
-  max-height: 120px;
+  max-height: calc(10 * 1.5em + 12px);
   line-height: 1.5;
   transition: border-color 0.15s;
 }
