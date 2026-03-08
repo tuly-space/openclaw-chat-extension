@@ -421,6 +421,7 @@ html, body {
 /* ─── Markdown rendering ─────────────────────────────────────────── */
 .message-bubble.markdown {
   line-height: 1.6;
+  white-space: normal;
 }
 
 .message-bubble.markdown p {
