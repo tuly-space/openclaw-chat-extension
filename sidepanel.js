@@ -60,6 +60,8 @@ const $inputAgent    = document.getElementById("input-agent");
 const $inputRelayPort= document.getElementById("input-relay-port");
 const $hljsTheme     = document.getElementById("hljs-theme");
 const $btnTheme      = document.getElementById("btn-theme");
+const $btnFontUp     = document.getElementById("btn-font-up");
+const $btnFontDown   = document.getElementById("btn-font-down");
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -75,6 +77,23 @@ function applyTheme(dark) {
 
 $btnTheme.addEventListener("click", () => applyTheme(!isDark));
 applyTheme(isDark);
+
+// ─── Font size ────────────────────────────────────────────────────────────────
+
+const FONT_SIZES = [11, 12, 13, 14, 15, 16, 18];
+let fontSizeIdx = FONT_SIZES.indexOf(parseInt(localStorage.getItem("oc_fontsize")) || 13);
+if (fontSizeIdx < 0) fontSizeIdx = 2; // default 13px
+
+function applyFontSize(idx) {
+  fontSizeIdx = Math.max(0, Math.min(FONT_SIZES.length - 1, idx));
+  const size = FONT_SIZES[fontSizeIdx];
+  document.documentElement.style.setProperty("--font-size", size + "px");
+  localStorage.setItem("oc_fontsize", size);
+}
+
+$btnFontUp.addEventListener("click", () => applyFontSize(fontSizeIdx + 1));
+$btnFontDown.addEventListener("click", () => applyFontSize(fontSizeIdx - 1));
+applyFontSize(fontSizeIdx);
 
 // ─── Markdown ─────────────────────────────────────────────────────────────────
 
