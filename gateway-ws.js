@@ -90,17 +90,15 @@ export class GatewayWsClient {
             type: 'req', id: 'connect', method: 'connect',
             params: {
               minProtocol: 3, maxProtocol: 3,
-              client: { id: 'openclaw-chat-extension', version: '1.2.0', platform: 'chrome-extension', mode: 'webchat', deviceFamily: 'browser' },
+              client: { id: 'webchat-ui', version: '1.2.0', platform: 'chrome-extension', mode: 'webchat', deviceFamily: 'browser' },
               role: 'operator', scopes, caps: [], commands: [],
               auth: { token },
               device: {
                 id: identity.deviceId,
-                key: identity.pubHex,
-                sig,
+                publicKey: identity.pubHex,
+                signature: sig,
+                signedAt: signedAtMs,
                 nonce,
-                signedAtMs,
-                platform: normalizeForAuth('chrome-extension'),
-                deviceFamily: normalizeForAuth('browser'),
               },
             },
           }))
