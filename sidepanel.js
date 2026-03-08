@@ -629,6 +629,18 @@ $inputMsg.addEventListener("drop", async (e) => {
   if (e.dataTransfer.files.length > 0) await addFiles(e.dataTransfer.files);
 });
 
+// Paste images
+$inputMsg.addEventListener("paste", async (e) => {
+  const files = [...(e.clipboardData?.items || [])]
+    .filter(item => item.kind === "file")
+    .map(item => item.getAsFile())
+    .filter(Boolean);
+  if (files.length > 0) {
+    e.preventDefault();
+    await addFiles(files);
+  }
+});
+
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (isStreaming) stopStreaming(); else if (historyOpen) closeHistory(); else if (settingsOpen) closeSettings(); } });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
