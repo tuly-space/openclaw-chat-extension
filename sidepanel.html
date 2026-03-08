@@ -88,7 +88,10 @@
   </div>
 
   <!-- Input area -->
+  <div id="attachments-preview" class="hidden"></div>
   <div id="input-area">
+    <button id="btn-attach" class="icon-btn" title="Attach file">📎</button>
+    <input type="file" id="file-input" multiple accept="image/*,.txt,.md,.json,.csv,.log,.pdf" hidden />
     <textarea
       id="input-msg"
       placeholder="Message OpenClaw…"

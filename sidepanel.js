@@ -52,6 +52,9 @@ const $btnRelay      = document.getElementById("btn-relay");
 const $relayDot      = document.getElementById("relay-dot");
 const $relayTabBar   = document.getElementById("relay-tab-bar");
 const $relayTabTitle = document.getElementById("relay-tab-title");
+const $btnAttach     = document.getElementById("btn-attach");
+const $fileInput     = document.getElementById("file-input");
+const $attachPreview = document.getElementById("attachments-preview");
 const $btnSaveSettings    = document.getElementById("btn-save-settings");
 const $btnCancelSettings  = document.getElementById("btn-cancel-settings");
 const $inputUrl      = document.getElementById("input-url");
@@ -94,6 +97,118 @@ function applyFontSize(idx) {
 $btnFontUp.addEventListener("click", () => applyFontSize(fontSizeIdx + 1));
 $btnFontDown.addEventListener("click", () => applyFontSize(fontSizeIdx - 1));
 applyFontSize(fontSizeIdx);
+
+// ─── Attachments ──────────────────────────────────────────────────────────────
+
+let pendingAttachments = []; // [{name, type, dataUrl}]
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+function isImageFile(file) {
+  return file.type.startsWith("image/");
+}
+
+function isTextFile(file) {
+  const textTypes = ["text/", "application/json", "application/xml"];
+  const textExts = [".txt", ".md", ".json", ".csv", ".log", ".xml", ".yaml", ".yml", ".toml", ".js", ".ts", ".py", ".sh", ".html", ".css"];
+  if (textTypes.some(t => file.type.startsWith(t))) return true;
+  return textExts.some(e => file.name.toLowerCase().endsWith(e));
+}
+
+async function addFiles(files) {
+  for (const file of files) {
+    if (file.size > 20 * 1024 * 1024) {
+      showError(`${file.name} too large (max 20MB)`);
+      continue;
+    }
+    if (isImageFile(file)) {
+      const dataUrl = await readFileAsDataUrl(file);
+      pendingAttachments.push({ name: file.name, type: "image", dataUrl });
+    } else if (isTextFile(file)) {
+      const text = await readFileAsText(file);
+      pendingAttachments.push({ name: file.name, type: "text", text });
+    } else {
+      // Binary files as base64
+      const dataUrl = await readFileAsDataUrl(file);
+      pendingAttachments.push({ name: file.name, type: "binary", dataUrl });
+    }
+  }
+  renderAttachmentPreview();
+}
+
+function removeAttachment(idx) {
+  pendingAttachments.splice(idx, 1);
+  renderAttachmentPreview();
+}
+
+function renderAttachmentPreview() {
+  $attachPreview.innerHTML = "";
+  if (pendingAttachments.length === 0) {
+    $attachPreview.classList.add("hidden");
+    return;
+  }
+  $attachPreview.classList.remove("hidden");
+  pendingAttachments.forEach((a, i) => {
+    const item = document.createElement("div");
+    item.className = "attach-item";
+
+    if (a.type === "image") {
+      const img = document.createElement("img");
+      img.src = a.dataUrl;
+      item.appendChild(img);
+    }
+
+    const name = document.createElement("span");
+    name.className = "attach-item-name";
+    name.textContent = a.name;
+    item.appendChild(name);
+
+    const rm = document.createElement("button");
+    rm.className = "attach-item-remove";
+    rm.textContent = "✕";
+    rm.addEventListener("click", () => removeAttachment(i));
+    item.appendChild(rm);
+
+    $attachPreview.appendChild(item);
+  });
+  updateSendButton();
+}
+
+function buildContentParts(text) {
+  const parts = [];
+  if (text) parts.push({ type: "text", text });
+  for (const a of pendingAttachments) {
+    if (a.type === "image") {
+      parts.push({ type: "image_url", image_url: { url: a.dataUrl } });
+    } else if (a.type === "text") {
+      parts.push({ type: "text", text: `[File: ${a.name}]\n${a.text}` });
+    } else {
+      parts.push({ type: "text", text: `[Attached binary file: ${a.name}]` });
+    }
+  }
+  return parts.length === 1 && parts[0].type === "text" ? text : parts;
+}
+
+function clearAttachments() {
+  pendingAttachments = [];
+  renderAttachmentPreview();
+}
 
 // ─── Markdown ─────────────────────────────────────────────────────────────────
 
@@ -159,7 +274,7 @@ function setTyping(v) { $typing.classList.toggle("hidden", !v); if (v) scrollBot
 function showError(msg) { $errorText.textContent = msg; $errorBanner.classList.remove("hidden"); }
 function hideError() { $errorBanner.classList.add("hidden"); }
 function setSendEnabled(v) { $btnSend.disabled = !v; }
-function updateSendButton() { $btnSend.disabled = !$inputMsg.value.trim() || isStreaming || !settings?.token; }
+function updateSendButton() { $btnSend.disabled = (!$inputMsg.value.trim() && pendingAttachments.length === 0) || isStreaming || !settings?.token; }
 function setStatus(state, label) { $status.className = `dot ${state}`; if (label) $headerName.textContent = label; }
 
 // ─── Load conversation into UI ────────────────────────────────────────────────
@@ -295,16 +410,23 @@ function openPort() {
 
 async function sendMessage() {
   const text = $inputMsg.value.trim();
-  if (!text || isStreaming || !settings?.token) return;
+  if ((!text && pendingAttachments.length === 0) || isStreaming || !settings?.token) return;
 
   $inputMsg.value = "";
   autoResize($inputMsg);
   hideError();
 
-  // Save user message locally
+  // Build content (text only or multi-part with attachments)
+  const content = buildContentParts(text);
+  const hasAttachments = pendingAttachments.length > 0;
+  const attachNames = pendingAttachments.map(a => a.name);
+
+  // Save user message locally (text only for display)
+  const displayText = hasAttachments ? `${text}\n📎 ${attachNames.join(", ")}` : text;
   await appendMessage(currentConv, "user", text);
 
-  appendMessageEl("user", text);
+  appendMessageEl("user", displayText);
+  clearAttachments();
   setTyping(true);
   setSendEnabled(false);
   isStreaming = true;
@@ -315,8 +437,9 @@ async function sendMessage() {
   const agentId = settings.agentId || "main";
   const sessionKey = `agent:${agentId}:conv-${currentConv.id}`;
 
-  // Build full message history for context
-  const messages = currentConv.messages.map(m => ({ role: m.role, content: m.content }));
+  // Build full message history; last message uses content parts if attachments
+  const messages = currentConv.messages.slice(0, -1).map(m => ({ role: m.role, content: m.content }));
+  messages.push({ role: "user", content });
 
   const port = openPort();
 
@@ -491,6 +614,19 @@ $btnRelay.addEventListener("click", async () => {
     showError(result?.error || "Relay toggle failed");
     setTimeout(() => { hideError(); setRelayStatus("off"); }, 3000);
   }
+});
+
+$btnAttach.addEventListener("click", () => $fileInput.click());
+$fileInput.addEventListener("change", async () => {
+  if ($fileInput.files.length > 0) await addFiles($fileInput.files);
+  $fileInput.value = "";
+});
+
+// Drag & drop on input area
+$inputMsg.addEventListener("dragover", (e) => { e.preventDefault(); });
+$inputMsg.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length > 0) await addFiles(e.dataTransfer.files);
 });
 
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (isStreaming) stopStreaming(); else if (historyOpen) closeHistory(); else if (settingsOpen) closeSettings(); } });

@@ -644,3 +644,57 @@ html, body {
 
 .history-item:hover .history-item-delete { opacity: 1; }
 .history-item-delete:hover { background: rgba(224,92,92,0.15); }
+
+/* ─── Attachments preview ────────────────────────────────────────── */
+#attachments-preview {
+  display: flex;
+  gap: 6px;
+  padding: 6px 12px 0;
+  flex-wrap: wrap;
+}
+#attachments-preview.hidden { display: none; }
+
+.attach-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  max-width: 160px;
+}
+
+.attach-item img {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.attach-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.attach-item-remove {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.attach-item-remove:hover { color: var(--error); }
+
+#btn-attach {
+  font-size: 15px;
+  padding: 4px 6px;
+  flex-shrink: 0;
+}
