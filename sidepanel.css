@@ -378,6 +378,7 @@ html, body {
   font-family: var(--font);
   resize: none;
   outline: none;
+  min-height: calc(3 * 1.5em + 12px);
   max-height: 120px;
   line-height: 1.5;
   transition: border-color 0.15s;

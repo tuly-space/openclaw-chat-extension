@@ -583,7 +583,8 @@ async function init(s) {
 
 function autoResize(el) {
   el.style.height = "auto";
-  el.style.height = Math.min(el.scrollHeight, 120) + "px";
+  const minH = parseFloat(getComputedStyle(el).minHeight) || 0;
+  el.style.height = Math.max(minH, Math.min(el.scrollHeight, 120)) + "px";
 }
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
