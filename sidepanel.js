@@ -468,7 +468,7 @@ function autoResize(el) {
 $btnSend.addEventListener("click", () => { if (isStreaming) stopStreaming(); else sendMessage(); });
 
 $inputMsg.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!isStreaming) sendMessage(); }
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); if (!isStreaming) sendMessage(); }
 });
 
 $inputMsg.addEventListener("input", () => { autoResize($inputMsg); updateSendButton(); });

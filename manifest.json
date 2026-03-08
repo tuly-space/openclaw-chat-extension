@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "OpenClaw Chat",
   "description": "Chat side panel + browser relay for OpenClaw",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "permissions": [
     "storage",
     "sidePanel",
