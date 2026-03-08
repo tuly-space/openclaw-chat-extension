@@ -457,8 +457,8 @@ html, body {
 }
 
 .message-bubble.markdown pre {
-  background: #111;
-  border: 1px solid var(--border);
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,0.12);
   border-radius: 8px;
   padding: 10px 12px;
   overflow-x: auto;
@@ -471,7 +471,7 @@ html, body {
   border: none;
   padding: 0;
   font-size: 0.82em;
-  color: #d4d4d4;
+  color: #e6edf3;
 }
 
 .message-bubble.markdown blockquote {
@@ -537,12 +537,17 @@ html, body {
 
 [data-theme="light"] .message-bubble.markdown pre {
   background: #f6f8fa;
-  border-color: var(--border);
+  border-color: #d0d7de;
+}
+
+[data-theme="light"] .message-bubble.markdown pre code {
+  color: #1f2328;
 }
 
 [data-theme="light"] .message-bubble.markdown code {
-  background: rgba(0,0,0,0.05);
-  border-color: rgba(0,0,0,0.1);
+  background: rgba(0,0,0,0.06);
+  border-color: rgba(0,0,0,0.12);
+  color: #1f2328;
 }
 
 [data-theme="light"] #relay-tab-bar {
