@@ -359,7 +359,7 @@ html, body {
 /* Input area */
 #input-area {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
   padding: 8px 10px;
   background: var(--bg2);
@@ -399,7 +399,6 @@ html, body {
   justify-content: center;
   flex-shrink: 0;
   transition: background 0.15s, opacity 0.15s;
-  margin-bottom: 1px;
 }
 
 #btn-send:hover:not(:disabled) { background: var(--accent-hover); }
