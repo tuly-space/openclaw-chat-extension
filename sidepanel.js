@@ -1,27 +1,23 @@
 /**
  * sidepanel.js — OpenClaw Chat Side Panel
- * Chat via background service worker (CORS-free fetch) + runtime port streaming
+ * Chat with conversation history, markdown, syntax highlighting, relay status
  */
 
-"use strict";
+import {
+  listConversations, loadConversation, createConversation,
+  appendMessage, deleteConversation,
+} from './conversations.js';
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 const SETTINGS_KEY = "openclaw_settings_v1";
-const DEFAULT_SETTINGS = {
-  gatewayUrl: "https://dash.tuly.space",
-  token: "",
-  agentId: "main",
-};
+const DEFAULT_SETTINGS = { gatewayUrl: "https://dash.tuly.space", token: "", agentId: "main", relayPort: 18792 };
 
 async function loadSettings() {
   const s = await chrome.storage.local.get(SETTINGS_KEY);
   return { ...DEFAULT_SETTINGS, ...(s[SETTINGS_KEY] || {}) };
 }
-
-async function saveSettings(s) {
-  await chrome.storage.local.set({ [SETTINGS_KEY]: s });
-}
+async function saveSettings(s) { await chrome.storage.local.set({ [SETTINGS_KEY]: s }); }
 
 // ─── State ────────────────────────────────────────────────────────────────────
 
@@ -29,61 +25,42 @@ let settings = null;
 let isStreaming = false;
 let chatPort = null;
 let settingsOpen = false;
+let historyOpen = false;
+let currentConv = null;   // full conversation object
 
-// DOM refs
-const $status     = document.getElementById("status-dot");
-const $headerName = document.getElementById("header-name");
-const $errorBanner= document.getElementById("error-banner");
-const $errorText  = document.getElementById("error-text");
-const $btnRetry   = document.getElementById("btn-retry");
+// ─── DOM refs ─────────────────────────────────────────────────────────────────
+
+const $status        = document.getElementById("status-dot");
+const $headerName    = document.getElementById("header-name");
+const $errorBanner   = document.getElementById("error-banner");
+const $errorText     = document.getElementById("error-text");
+const $btnRetry      = document.getElementById("btn-retry");
 const $settingsPanel = document.getElementById("settings-panel");
-const $messages   = document.getElementById("messages");
-const $typing     = document.getElementById("typing-indicator");
-const $inputMsg   = document.getElementById("input-msg");
-const $btnSend    = document.getElementById("btn-send");
-const $btnSettings= document.getElementById("btn-settings");
+const $messages      = document.getElementById("messages");
+const $typing        = document.getElementById("typing-indicator");
+const $inputMsg      = document.getElementById("input-msg");
+const $btnSend       = document.getElementById("btn-send");
+const $btnSettings   = document.getElementById("btn-settings");
+const $btnNew        = document.getElementById("btn-new");
+const $btnHistory    = document.getElementById("btn-history");
+const $btnHistoryClose = document.getElementById("btn-history-close");
+const $historyPanel  = document.getElementById("history-panel");
+const $historyList   = document.getElementById("history-list");
 const $btnRelay      = document.getElementById("btn-relay");
 const $relayDot      = document.getElementById("relay-dot");
 const $relayTabBar   = document.getElementById("relay-tab-bar");
 const $relayTabTitle = document.getElementById("relay-tab-title");
-const $btnNew     = document.getElementById("btn-new");
-const $btnSaveSettings = document.getElementById("btn-save-settings");
-const $btnCancelSettings = document.getElementById("btn-cancel-settings");
-const $inputUrl   = document.getElementById("input-url");
-const $inputToken = document.getElementById("input-token");
-const $inputAgent = document.getElementById("input-agent");
-const $inputRelayPort = document.getElementById("input-relay-port");
-
-// ─── Status helpers ───────────────────────────────────────────────────────────
-
-function setStatus(state, label) {
-  $status.className = `dot ${state}`;
-  if (label) $headerName.textContent = label;
-}
-
-function showError(msg) {
-  $errorText.textContent = msg;
-  $errorBanner.classList.remove("hidden");
-}
-
-function hideError() {
-  $errorBanner.classList.add("hidden");
-}
-
-function setSendEnabled(v) {
-  $btnSend.disabled = !v;
-}
-
-function updateSendButton() {
-  $btnSend.disabled = !$inputMsg.value.trim() || isStreaming || !settings?.token;
-}
-
-// ─── Message rendering ────────────────────────────────────────────────────────
+const $btnSaveSettings    = document.getElementById("btn-save-settings");
+const $btnCancelSettings  = document.getElementById("btn-cancel-settings");
+const $inputUrl      = document.getElementById("input-url");
+const $inputToken    = document.getElementById("input-token");
+const $inputAgent    = document.getElementById("input-agent");
+const $inputRelayPort= document.getElementById("input-relay-port");
+const $hljsTheme     = document.getElementById("hljs-theme");
+const $btnTheme      = document.getElementById("btn-theme");
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
-const $hljsTheme = document.getElementById("hljs-theme");
-const $btnTheme  = document.getElementById("btn-theme");
 let isDark = localStorage.getItem("oc_theme") !== "light";
 
 function applyTheme(dark) {
@@ -95,22 +72,21 @@ function applyTheme(dark) {
 }
 
 $btnTheme.addEventListener("click", () => applyTheme(!isDark));
-applyTheme(isDark); // boot
+applyTheme(isDark);
 
-// ─── Markdown rendering ───────────────────────────────────────────────────────
+// ─── Markdown ─────────────────────────────────────────────────────────────────
 
 if (typeof marked !== "undefined") {
   marked.use({
-    gfm: true,
-    breaks: true,
+    gfm: true, breaks: true,
     renderer: (() => {
       const r = new marked.Renderer();
       r.code = ({ text, lang }) => {
         const validLang = lang && hljs?.getLanguage?.(lang) ? lang : null;
-        const highlighted = validLang
+        const hl = validLang
           ? hljs.highlight(text, { language: validLang }).value
           : (typeof hljs !== "undefined" ? hljs.highlightAuto(text).value : escapeHtml(text));
-        return `<pre><code class="hljs${validLang ? ` language-${validLang}` : ''}">${highlighted}</code></pre>`;
+        return `<pre><code class="hljs${validLang ? ` language-${validLang}` : ''}">${hl}</code></pre>`;
       };
       return r;
     })(),
@@ -127,21 +103,22 @@ function escapeHtml(s) {
           .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 
+// ─── Message rendering ────────────────────────────────────────────────────────
+
 function appendMessageEl(role, text, { streaming = false } = {}) {
   const wrap = document.createElement("div");
   wrap.className = `message ${role}`;
 
   if (role !== "system" && role !== "error") {
-    const roleLabel = document.createElement("div");
-    roleLabel.className = "message-role";
-    roleLabel.textContent = role === "user" ? "You" : "OpenClaw";
-    wrap.appendChild(roleLabel);
+    const lbl = document.createElement("div");
+    lbl.className = "message-role";
+    lbl.textContent = role === "user" ? "You" : "OpenClaw";
+    wrap.appendChild(lbl);
   }
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
   if (streaming) bubble.classList.add("streaming-cursor");
-
   if (role === "assistant") {
     bubble.classList.add("markdown");
     bubble.innerHTML = renderMarkdown(text);
@@ -155,31 +132,128 @@ function appendMessageEl(role, text, { streaming = false } = {}) {
   return bubble;
 }
 
-function scrollBottom() {
-  $messages.scrollTop = $messages.scrollHeight;
+function scrollBottom() { $messages.scrollTop = $messages.scrollHeight; }
+function clearMessages() { $messages.innerHTML = ""; }
+function setTyping(v) { $typing.classList.toggle("hidden", !v); if (v) scrollBottom(); }
+function showError(msg) { $errorText.textContent = msg; $errorBanner.classList.remove("hidden"); }
+function hideError() { $errorBanner.classList.add("hidden"); }
+function setSendEnabled(v) { $btnSend.disabled = !v; }
+function updateSendButton() { $btnSend.disabled = !$inputMsg.value.trim() || isStreaming || !settings?.token; }
+function setStatus(state, label) { $status.className = `dot ${state}`; if (label) $headerName.textContent = label; }
+
+// ─── Load conversation into UI ────────────────────────────────────────────────
+
+function renderConversation(conv) {
+  clearMessages();
+  for (const m of conv.messages) {
+    if (m.role === "user" || m.role === "assistant") {
+      appendMessageEl(m.role, m.content);
+    }
+  }
 }
 
-function clearMessages() {
-  $messages.innerHTML = "";
+// ─── History panel ────────────────────────────────────────────────────────────
+
+async function openHistory() {
+  historyOpen = true;
+  $historyPanel.classList.remove("hidden");
+  await refreshHistoryList();
 }
 
-function setTyping(v) {
-  $typing.classList.toggle("hidden", !v);
-  if (v) scrollBottom();
+function closeHistory() {
+  historyOpen = false;
+  $historyPanel.classList.add("hidden");
+}
+
+function relativeTime(ts) {
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+async function refreshHistoryList() {
+  const convs = await listConversations();
+  $historyList.innerHTML = "";
+
+  if (convs.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = "No conversations yet";
+    $historyList.appendChild(empty);
+    return;
+  }
+
+  for (const c of convs) {
+    const item = document.createElement("div");
+    item.className = "history-item" + (currentConv?.id === c.id ? " active" : "");
+
+    const info = document.createElement("div");
+    info.className = "history-item-info";
+    info.addEventListener("click", () => switchConversation(c.id));
+
+    const title = document.createElement("div");
+    title.className = "history-item-title";
+    title.textContent = c.title;
+
+    const time = document.createElement("div");
+    time.className = "history-item-time";
+    time.textContent = relativeTime(c.updatedAt);
+
+    info.appendChild(title);
+    info.appendChild(time);
+
+    const del = document.createElement("button");
+    del.className = "history-item-delete";
+    del.title = "Delete";
+    del.textContent = "🗑";
+    del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await deleteConversationItem(c.id);
+    });
+
+    item.appendChild(info);
+    item.appendChild(del);
+    $historyList.appendChild(item);
+  }
+}
+
+async function switchConversation(id) {
+  const conv = await loadConversation(id);
+  if (!conv) return;
+  currentConv = conv;
+  renderConversation(conv);
+  closeHistory();
+}
+
+async function deleteConversationItem(id) {
+  await deleteConversation(id);
+  if (currentConv?.id === id) {
+    currentConv = await createConversation();
+    clearMessages();
+  }
+  await refreshHistoryList();
+}
+
+async function newConversation() {
+  if (isStreaming) stopStreaming();
+  currentConv = await createConversation();
+  clearMessages();
 }
 
 // ─── Port management ──────────────────────────────────────────────────────────
 
 function openPort() {
-  if (chatPort) {
-    try { chatPort.disconnect(); } catch (_) {}
-  }
+  if (chatPort) { try { chatPort.disconnect(); } catch (_) {} }
   chatPort = chrome.runtime.connect({ name: "chat" });
   chatPort.onDisconnect.addListener(() => {
     chatPort = null;
-    if (isStreaming) {
-      finishStreaming();
-    }
+    if (isStreaming) finishStreaming();
   });
   return chatPort;
 }
@@ -194,6 +268,9 @@ async function sendMessage() {
   autoResize($inputMsg);
   hideError();
 
+  // Save user message locally
+  await appendMessage(currentConv, "user", text);
+
   appendMessageEl("user", text);
   setTyping(true);
   setSendEnabled(false);
@@ -203,11 +280,14 @@ async function sendMessage() {
   let assistantText = "";
 
   const agentId = settings.agentId || "main";
-  const sessionKey = `agent:${agentId}:sidepanel`;
+  const sessionKey = `agent:${agentId}:conv-${currentConv.id}`;
+
+  // Build full message history for context
+  const messages = currentConv.messages.map(m => ({ role: m.role, content: m.content }));
 
   const port = openPort();
 
-  port.onMessage.addListener((msg) => {
+  port.onMessage.addListener(async (msg) => {
     switch (msg.type) {
       case "START":
         setTyping(false);
@@ -216,30 +296,26 @@ async function sendMessage() {
 
       case "DELTA":
         assistantText += msg.delta;
-        if (streamingBubble) {
-          streamingBubble.innerHTML = renderMarkdown(assistantText);
-          scrollBottom();
-        }
+        if (streamingBubble) { streamingBubble.innerHTML = renderMarkdown(assistantText); scrollBottom(); }
         break;
 
       case "DONE":
         if (streamingBubble) streamingBubble.classList.remove("streaming-cursor");
+        if (assistantText) await appendMessage(currentConv, "assistant", assistantText);
         finishStreaming();
         break;
 
       case "ABORTED":
         if (streamingBubble) streamingBubble.classList.remove("streaming-cursor");
         if (!assistantText) appendMessageEl("system", "— stopped —");
-        if (streamingBubble) { streamingBubble.innerHTML = renderMarkdown(assistantText); }
+        else { streamingBubble.innerHTML = renderMarkdown(assistantText); await appendMessage(currentConv, "assistant", assistantText); }
         finishStreaming();
         break;
 
       case "ERROR":
         setTyping(false);
-        if (streamingBubble) {
-          streamingBubble.classList.remove("streaming-cursor");
-          streamingBubble.innerHTML = renderMarkdown(assistantText || "");
-        }
+        if (streamingBubble) { streamingBubble.classList.remove("streaming-cursor"); streamingBubble.innerHTML = renderMarkdown(assistantText || ""); }
+        if (assistantText) await appendMessage(currentConv, "assistant", assistantText);
         appendMessageEl("error", `Error: ${msg.message}`);
         showError(msg.message);
         finishStreaming();
@@ -247,7 +323,7 @@ async function sendMessage() {
     }
   });
 
-  port.postMessage({ type: "SEND", text, settings, sessionKey });
+  port.postMessage({ type: "SEND", messages, settings, sessionKey });
 }
 
 function finishStreaming() {
@@ -258,86 +334,11 @@ function finishStreaming() {
 }
 
 function stopStreaming() {
-  if (chatPort) {
-    try { chatPort.disconnect(); } catch (_) {}
-    chatPort = null;
-  }
+  if (chatPort) { try { chatPort.disconnect(); } catch (_) {} chatPort = null; }
   finishStreaming();
 }
 
-// ─── Connection test ──────────────────────────────────────────────────────────
-
-async function testConnection(s) {
-  // Use a one-shot port to test connectivity
-  return new Promise((resolve, reject) => {
-    const port = chrome.runtime.connect({ name: "chat" });
-    const timeout = setTimeout(() => {
-      port.disconnect();
-      reject(new Error("Connection timeout"));
-    }, 6000);
-
-    port.onMessage.addListener((msg) => {
-      clearTimeout(timeout);
-      port.disconnect();
-      if (msg.type === "ERROR") reject(new Error(msg.message));
-      else resolve(true);
-    });
-
-    port.onDisconnect.addListener(() => {
-      clearTimeout(timeout);
-    });
-
-    port.postMessage({
-      type: "SEND",
-      text: "ping",
-      settings: s,
-      sessionKey: `agent:${s.agentId || "main"}:sidepanel-test`,
-    });
-  });
-}
-
-// ─── Settings panel ───────────────────────────────────────────────────────────
-
-// ─── Relay UI ────────────────────────────────────────────────────────────────
-
-function setRelayStatus(state) {
-  $relayDot.className = `relay-indicator ${state}`;
-  $btnRelay.title = state === 'on'
-    ? 'Relay ON — click to detach'
-    : state === 'connecting' ? 'Relay connecting…'
-    : 'Toggle browser relay on current tab';
-}
-
-function subscribeRelayStatus() {
-  const port = chrome.runtime.connect({ name: 'relay-status' });
-  port.onMessage.addListener((msg) => {
-    if (msg.type === 'RELAY_STATUS') {
-      const hasAttached = Array.isArray(msg.attachedTabs)
-        ? msg.attachedTabs.length > 0
-        : msg.attachedTabs > 0;
-      const state = !msg.followMode ? 'off'
-        : !msg.connected ? 'connecting'
-        : hasAttached ? 'on'
-        : 'connecting';
-      setRelayStatus(state);
-      $btnRelay.title = msg.followMode
-        ? 'Relay ON — following active tab (click to stop)'
-        : 'Enable relay — will follow active tab';
-
-      // Tab title bar
-      if (msg.followMode && msg.tabTitle) {
-        $relayTabTitle.textContent = msg.tabTitle;
-        $relayTabBar.classList.remove('hidden');
-      } else {
-        $relayTabBar.classList.add('hidden');
-        $relayTabTitle.textContent = '';
-      }
-    }
-  });
-  port.onDisconnect.addListener(() => {
-    setTimeout(subscribeRelayStatus, 2000);
-  });
-}
+// ─── Settings ─────────────────────────────────────────────────────────────────
 
 async function openSettings() {
   const s = await loadSettings();
@@ -350,10 +351,7 @@ async function openSettings() {
   if (!s.token) $inputToken.focus();
 }
 
-function closeSettings() {
-  $settingsPanel.classList.add("hidden");
-  settingsOpen = false;
-}
+function closeSettings() { $settingsPanel.classList.add("hidden"); settingsOpen = false; }
 
 async function saveAndConnect() {
   const s = {
@@ -366,6 +364,31 @@ async function saveAndConnect() {
   await saveSettings(s);
   closeSettings();
   await init(s);
+}
+
+// ─── Relay UI ─────────────────────────────────────────────────────────────────
+
+function setRelayStatus(state) {
+  $relayDot.className = `relay-indicator ${state}`;
+}
+
+function subscribeRelayStatus() {
+  const port = chrome.runtime.connect({ name: "relay-status" });
+  port.onMessage.addListener((msg) => {
+    if (msg.type !== "RELAY_STATUS") return;
+    const hasAttached = Array.isArray(msg.attachedTabs) ? msg.attachedTabs.length > 0 : msg.attachedTabs > 0;
+    const state = !msg.followMode ? "off" : !msg.connected ? "connecting" : hasAttached ? "on" : "connecting";
+    setRelayStatus(state);
+    $btnRelay.title = msg.followMode ? "Relay ON — following active tab (click to stop)" : "Enable relay — will follow active tab";
+    if (msg.followMode && msg.tabTitle) {
+      $relayTabTitle.textContent = msg.tabTitle;
+      $relayTabBar.classList.remove("hidden");
+    } else {
+      $relayTabBar.classList.add("hidden");
+      $relayTabTitle.textContent = "";
+    }
+  });
+  port.onDisconnect.addListener(() => setTimeout(subscribeRelayStatus, 2000));
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -383,7 +406,16 @@ async function init(s) {
   setStatus("connected", `OpenClaw · ${settings.agentId || "main"}`);
   setSendEnabled(true);
   hideError();
-  clearMessages();
+
+  // Load or create latest conversation
+  const convs = await listConversations();
+  if (convs.length > 0) {
+    currentConv = await loadConversation(convs[0].id);
+    renderConversation(currentConv);
+  } else {
+    currentConv = await createConversation();
+    clearMessages();
+  }
 }
 
 // ─── Textarea ─────────────────────────────────────────────────────────────────
@@ -395,37 +427,23 @@ function autoResize(el) {
 
 // ─── Event listeners ──────────────────────────────────────────────────────────
 
-$btnSend.addEventListener("click", () => {
-  if (isStreaming) stopStreaming();
-  else sendMessage();
-});
+$btnSend.addEventListener("click", () => { if (isStreaming) stopStreaming(); else sendMessage(); });
 
 $inputMsg.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    if (!isStreaming) sendMessage();
-  }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!isStreaming) sendMessage(); }
 });
 
-$inputMsg.addEventListener("input", () => {
-  autoResize($inputMsg);
-  updateSendButton();
-});
+$inputMsg.addEventListener("input", () => { autoResize($inputMsg); updateSendButton(); });
 
-$btnSettings.addEventListener("click", () => {
-  if (settingsOpen) closeSettings();
-  else openSettings();
-});
-
+$btnSettings.addEventListener("click", () => { if (settingsOpen) closeSettings(); else openSettings(); });
 $btnCancelSettings.addEventListener("click", closeSettings);
 $btnSaveSettings.addEventListener("click", saveAndConnect);
 $btnRetry.addEventListener("click", () => init());
 
-$btnNew.addEventListener("click", () => {
-  if (!confirm("Start a new conversation?")) return;
-  clearMessages();
-  appendMessageEl("system", "— new conversation —");
-});
+$btnNew.addEventListener("click", newConversation);
+
+$btnHistory.addEventListener("click", () => { if (historyOpen) closeHistory(); else openHistory(); });
+$btnHistoryClose.addEventListener("click", closeHistory);
 
 $btnRelay.addEventListener("click", async () => {
   setRelayStatus("connecting");
@@ -437,9 +455,7 @@ $btnRelay.addEventListener("click", async () => {
   }
 });
 
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && isStreaming) stopStreaming();
-});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") { if (isStreaming) stopStreaming(); else if (historyOpen) closeHistory(); else if (settingsOpen) closeSettings(); } });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 

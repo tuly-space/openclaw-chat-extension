@@ -540,3 +540,92 @@ html, body {
   background: rgba(255, 90, 54, 0.06);
   border-bottom-color: rgba(255, 90, 54, 0.12);
 }
+
+/* ─── History panel ──────────────────────────────────────────────── */
+#history-panel {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+
+#history-panel.hidden { display: none; }
+
+#history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+#history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+
+.history-empty {
+  padding: 24px 16px;
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background 0.1s;
+}
+
+.history-item:hover { background: var(--bg2); }
+
+.history-item.active {
+  border-left-color: var(--accent);
+  background: var(--bg2);
+}
+
+.history-item-info {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 0;
+}
+
+.history-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.history-item-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.history-item-delete {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.1s;
+  flex-shrink: 0;
+}
+
+.history-item:hover .history-item-delete { opacity: 1; }
+.history-item-delete:hover { background: rgba(224,92,92,0.15); }

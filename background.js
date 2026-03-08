@@ -49,13 +49,15 @@ chrome.runtime.onConnect.addListener((port) => {
 // ─── Chat streaming ───────────────────────────────────────────────────────────
 
 async function handleChatStream(port, msg) {
-  const { text, settings, sessionKey } = msg
+  // `messages` = full conversation history; `text` = latest user message (legacy fallback)
+  const { text, messages, settings, sessionKey } = msg
   const ac = new AbortController()
 
   port.onDisconnect.addListener(() => ac.abort())
 
   try {
     const agentId = settings.agentId || 'main'
+    const chatMessages = messages || [{ role: 'user', content: text }]
     const res = await fetch(`${settings.gatewayUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: {
@@ -65,7 +67,7 @@ async function handleChatStream(port, msg) {
       },
       body: JSON.stringify({
         model: `openclaw:${agentId}`,
-        messages: [{ role: 'user', content: text }],
+        messages: chatMessages,
         stream: true,
       }),
       signal: ac.signal,
