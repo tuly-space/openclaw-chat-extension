@@ -4,7 +4,6 @@
  */
 
 import * as relay from './relay.js'
-import { listGatewaySessions, loadGatewayChatHistory } from './gateway-ws.js'
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
@@ -129,19 +128,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false
   }
 
-  if (msg.type === 'SESSIONS_LIST') {
-    getSettings().then(s => listGatewaySessions(s, msg.opts || {}))
-      .then(sessions => sendResponse({ ok: true, sessions }))
-      .catch(e => sendResponse({ ok: false, error: e.message }))
-    return true
-  }
-
-  if (msg.type === 'CHAT_HISTORY') {
-    getSettings().then(s => loadGatewayChatHistory(s, msg.sessionKey, msg.limit))
-      .then(messages => sendResponse({ ok: true, messages }))
-      .catch(e => sendResponse({ ok: false, error: e.message }))
-    return true
-  }
 })
 
 // ─── Relay: debugger + tab lifecycle ─────────────────────────────────────────

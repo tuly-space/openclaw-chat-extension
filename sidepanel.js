@@ -8,19 +8,7 @@ import {
   appendMessage, deleteConversation,
 } from './conversations.js';
 
-// ─── Gateway session helpers (via background) ─────────────────────────────────
 
-async function gatewaySessions() {
-  const r = await chrome.runtime.sendMessage({ type: 'SESSIONS_LIST', opts: { limit: 30 } });
-  if (!r?.ok) throw new Error(r?.error || 'Failed to list sessions');
-  return r.sessions;
-}
-
-async function gatewayChatHistory(sessionKey) {
-  const r = await chrome.runtime.sendMessage({ type: 'CHAT_HISTORY', sessionKey, limit: 200 });
-  if (!r?.ok) throw new Error(r?.error || 'Failed to load history');
-  return r.messages;
-}
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
@@ -174,8 +162,7 @@ async function openHistory() {
   await refreshHistoryList();
 }
 
-let _gatewaySessions = null;
-let _gatewaySessionsLoadedAt = 0;
+
 
 function closeHistory() {
   historyOpen = false;
@@ -228,100 +215,48 @@ function makeHistoryItem({ key, title, subtitle, isCurrent, onSelect, onDelete }
 
 async function refreshHistoryList() {
   $historyList.innerHTML = "";
+  const convs = await listConversations();
 
-  // Show loading
-  const loading = document.createElement("div");
-  loading.className = "history-empty";
-  loading.textContent = "Loading…";
-  $historyList.appendChild(loading);
-
-  // Load gateway sessions (cache 30s)
-  let gSessions = [];
-  if (Date.now() - _gatewaySessionsLoadedAt < 30000 && _gatewaySessions) {
-    gSessions = _gatewaySessions;
-  } else {
-    try {
-      gSessions = await gatewaySessions();
-      _gatewaySessions = gSessions;
-      _gatewaySessionsLoadedAt = Date.now();
-    } catch (e) {
-      gSessions = [];
-    }
-  }
-
-  $historyList.innerHTML = "";
-
-  if (gSessions.length === 0) {
+  if (convs.length === 0) {
     const empty = document.createElement("div");
     empty.className = "history-empty";
-    empty.textContent = "No conversations found on gateway";
+    empty.textContent = "No conversations yet";
     $historyList.appendChild(empty);
     return;
   }
 
-  for (const s of gSessions) {
-    const title = s.derivedTitle || s.label || s.key || "Untitled";
-    const preview = s.lastMessage ? s.lastMessage.slice(0, 80) : "";
-    const timeStr = s.updatedAt ? relativeTime(new Date(s.updatedAt).getTime()) : "";
-    const subtitle = [preview, timeStr].filter(Boolean).join(" · ");
-    const isCurrent = currentConv?.gatewaySessionKey === s.key;
-
+  for (const c of convs) {
     $historyList.appendChild(makeHistoryItem({
-      key: s.key,
-      title,
-      subtitle,
-      isCurrent,
-      onSelect: () => switchToGatewaySession(s),
-      onDelete: null, // gateway sessions not deleted from extension
+      key: c.id,
+      title: c.title,
+      subtitle: relativeTime(c.updatedAt),
+      isCurrent: currentConv?.id === c.id,
+      onSelect: () => switchConversation(c.id),
+      onDelete: () => deleteConversationItem(c.id),
     }));
   }
 }
 
-async function switchToGatewaySession(session) {
-  clearMessages();
-  appendMessageEl("system", "Loading history…");
-
-  try {
-    const messages = await gatewayChatHistory(session.key);
-    clearMessages();
-
-    // Build a local conv shell around the gateway session
-    currentConv = {
-      id: null,
-      gatewaySessionKey: session.key,
-      title: session.derivedTitle || session.label || session.key,
-      messages: [],
-    };
-
-    for (const m of messages) {
-      // Gateway chat.history message format: {role, content/text, ...}
-      const role = m.role || (m.type === 'human' ? 'user' : m.type === 'ai' ? 'assistant' : null);
-      const content = m.content ?? m.text ?? '';
-      if (!role || !content) continue;
-      currentConv.messages.push({ role, content });
-      appendMessageEl(role, content);
-    }
-
-    if (currentConv.messages.length === 0) {
-      appendMessageEl("system", "— no messages —");
-    }
-  } catch (e) {
-    clearMessages();
-    appendMessageEl("system", `Failed to load: ${e.message}`);
-  }
-
+async function switchConversation(id) {
+  const conv = await loadConversation(id);
+  if (!conv) return;
+  currentConv = conv;
+  renderConversation(conv);
   closeHistory();
 }
 
-function newConversation() {
+async function deleteConversationItem(id) {
+  await deleteConversation(id);
+  if (currentConv?.id === id) {
+    currentConv = await createConversation();
+    clearMessages();
+  }
+  await refreshHistoryList();
+}
+
+async function newConversation() {
   if (isStreaming) stopStreaming();
-  _gatewaySessions = null; // invalidate cache
-  currentConv = {
-    id: `local-${Date.now()}`,
-    gatewaySessionKey: null,
-    title: "New conversation",
-    messages: [],
-  };
+  currentConv = await createConversation();
   clearMessages();
 }
 
@@ -359,8 +294,7 @@ async function sendMessage() {
   let assistantText = "";
 
   const agentId = settings.agentId || "main";
-  // Use gateway session key if continuing a gateway session, else a local key
-  const sessionKey = currentConv.gatewaySessionKey || `agent:${agentId}:conv-${currentConv.id}`;
+  const sessionKey = `agent:${agentId}:conv-${currentConv.id}`;
 
   // Build full message history for context
   const messages = currentConv.messages.map(m => ({ role: m.role, content: m.content }));
@@ -487,14 +421,20 @@ async function init(s) {
   setSendEnabled(true);
   hideError();
 
-  // Start fresh conversation (history loaded on demand via 🕐 button)
-  currentConv = {
-    id: `local-${Date.now()}`,
-    gatewaySessionKey: null,
-    title: "New conversation",
-    messages: [],
-  };
-  clearMessages();
+  // Restore last conversation or create new
+  const convs = await listConversations();
+  if (convs.length > 0) {
+    currentConv = await loadConversation(convs[0].id);
+    if (currentConv) {
+      renderConversation(currentConv);
+    } else {
+      currentConv = await createConversation();
+      clearMessages();
+    }
+  } else {
+    currentConv = await createConversation();
+    clearMessages();
+  }
 }
 
 // ─── Textarea ─────────────────────────────────────────────────────────────────
