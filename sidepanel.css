@@ -233,7 +233,7 @@ html, body {
 .message-bubble {
   padding: 8px 10px;
   border-radius: var(--radius);
-  font-size: 13px;
+  font-size: var(--font-size);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -374,7 +374,7 @@ html, body {
   border-radius: 8px;
   color: var(--text);
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: var(--font-size);
   font-family: var(--font);
   resize: none;
   outline: none;
