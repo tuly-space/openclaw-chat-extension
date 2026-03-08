@@ -128,6 +128,47 @@ Settings are stored in `chrome.storage.local` and configured via the ⚙ panel:
 
 ---
 
+## Internal Protocols
+
+### Storage Keys
+
+| Key | Storage | Description |
+|---|---|---|
+| `openclaw_settings_v1` | `chrome.storage.local` | Gateway URL, token, agent ID, relay port |
+| `oc_convs` | `chrome.storage.local` | Conversation index: `[{id, title, updatedAt}]` |
+| `oc_conv_{id}` | `chrome.storage.local` | Full conversation: `{id, title, createdAt, updatedAt, messages}` |
+| `relayFollowMode` | `chrome.storage.session` | Whether relay follow-mode is active (survives SW restart) |
+| `persistedTabs` | `chrome.storage.session` | Relay attached tab state for SW rehydration |
+| `oc_theme` | `localStorage` | `"dark"` or `"light"` |
+| `oc_fontsize` | `localStorage` | Font size in px (11–18) |
+
+### Port Names (chrome.runtime.connect)
+
+| Port | Direction | Purpose |
+|---|---|---|
+| `"chat"` | sidepanel → background | Streaming chat: `SEND` → `START/DELTA/DONE/ABORTED/ERROR` |
+| `"relay-status"` | background → sidepanel | Push relay status updates (`RELAY_STATUS` events) |
+
+### Message Protocol (sidepanel ↔ background)
+
+**Chat (via port `"chat"`):**
+- → `{type: "SEND", messages: [{role, content}], settings, sessionKey}`
+- ← `{type: "START"}` — streaming begins
+- ← `{type: "DELTA", delta: "..."}` — token chunk
+- ← `{type: "DONE"}` — streaming complete
+- ← `{type: "ABORTED"}` — user cancelled
+- ← `{type: "ERROR", message: "..."}` — error occurred
+
+**Relay (via chrome.runtime.sendMessage):**
+- → `{type: "RELAY_TOGGLE"}` → `{ok, attached?, error?}`
+- → `{type: "RELAY_STATUS_GET"}` → `{connected, attachedTabs}`
+
+### Attachment Limitations
+
+File attachments (images, text files) are sent as `image_url` data URIs or inline text in the current request only. **Attachments are NOT persisted** in conversation history — storing multi-MB data URLs in `chrome.storage.local` would be impractical. When restoring a conversation from history, only the text content of user messages is shown.
+
+---
+
 ## Session Management
 
 Each conversation gets a stable session key: `agent:{agentId}:conv-{localId}`
