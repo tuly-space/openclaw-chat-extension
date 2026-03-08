@@ -373,13 +373,13 @@ html, body {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text);
-  padding: 8px 10px;
+  padding: 6px 10px;
   font-size: var(--font-size);
   font-family: var(--font);
   resize: none;
   outline: none;
   max-height: 120px;
-  line-height: 1.45;
+  line-height: 1.5;
   transition: border-color 0.15s;
 }
 
