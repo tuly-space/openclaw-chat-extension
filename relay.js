@@ -1,17 +1,23 @@
 /**
  * relay.js — Browser relay module (merged from OpenClaw Browser Relay extension)
  *
- * Connects to the local OpenClaw relay server (ws://127.0.0.1:18792/extension)
+ * Connects to the configured OpenClaw gateway relay endpoint
  * and bridges CDP commands to/from attached Chrome tabs via chrome.debugger.
  *
- * Relay token is derived: HMAC-SHA256("openclaw-extension-relay-v1:<port>", gatewayToken)
+ * Relay token is derived: HMAC-SHA256("openclaw-extension-relay-v1:<gatewayUrl>", gatewayToken)
  */
 
-const DEFAULT_RELAY_PORT = 18792
+// ─── Gateway URL helpers ──────────────────────────────────────────────────────
+
+function gatewayUrlToRelayWs(gatewayUrl) {
+  const url = new URL(String(gatewayUrl))
+  const scheme = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${scheme}//${url.host}/extension`
+}
 
 // ─── Token derivation ─────────────────────────────────────────────────────────
 
-export async function deriveRelayToken(gatewayToken, port) {
+export async function deriveRelayToken(gatewayToken, gatewayUrl) {
   const enc = new TextEncoder()
   const key = await crypto.subtle.importKey(
     'raw',
@@ -23,16 +29,17 @@ export async function deriveRelayToken(gatewayToken, port) {
   const sig = await crypto.subtle.sign(
     'HMAC',
     key,
-    enc.encode(`openclaw-extension-relay-v1:${port}`)
+    enc.encode(`openclaw-extension-relay-v1:${gatewayUrl}`)
   )
   return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-export async function buildRelayWsUrl(port, gatewayToken) {
+export async function buildRelayWsUrl(gatewayUrl, gatewayToken) {
   const token = String(gatewayToken || '').trim()
   if (!token) throw new Error('Missing gatewayToken')
-  const relayToken = await deriveRelayToken(token, port)
-  return `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(relayToken)}`
+  const relayToken = await deriveRelayToken(token, gatewayUrl)
+  const baseUrl = gatewayUrlToRelayWs(gatewayUrl)
+  return `${baseUrl}?token=${encodeURIComponent(relayToken)}`
 }
 
 function reconnectDelayMs(attempt, opts = {}) {
@@ -129,19 +136,12 @@ export function getAttachedTabCount() {
   return n
 }
 
-export async function ensureRelayConnection(port, gatewayToken) {
+export async function ensureRelayConnection(gatewayUrl, gatewayToken) {
   if (relayWs && relayWs.readyState === WebSocket.OPEN) return
   if (relayConnectPromise) return await relayConnectPromise
 
   relayConnectPromise = (async () => {
-    const wsUrl = await buildRelayWsUrl(port, gatewayToken)
-
-    // Preflight
-    try {
-      await fetch(`http://127.0.0.1:${port}/`, { method: 'HEAD', signal: AbortSignal.timeout(2000) })
-    } catch (e) {
-      throw new Error(`Relay not reachable at :${port} — is OpenClaw node host running?`)
-    }
+    const wsUrl = await buildRelayWsUrl(gatewayUrl, gatewayToken)
 
     const ws = new WebSocket(wsUrl)
     relayWs = ws
@@ -183,7 +183,7 @@ function onRelayClosed(reason) {
   scheduleReconnect()
 }
 
-export let _scheduleReconnectPort = DEFAULT_RELAY_PORT
+export let _scheduleReconnectGatewayUrl = ''
 export let _scheduleReconnectToken = ''
 
 function scheduleReconnect() {
@@ -193,7 +193,7 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null
     try {
-      await ensureRelayConnection(_scheduleReconnectPort, _scheduleReconnectToken)
+      await ensureRelayConnection(_scheduleReconnectGatewayUrl, _scheduleReconnectToken)
       reconnectAttempt = 0
       await reannounceAttachedTabs()
     } catch {
@@ -490,7 +490,7 @@ async function findBrowsableActiveTab() {
   ) || null
 }
 
-export async function toggleRelayOnActiveTab(port, gatewayToken) {
+export async function toggleRelayOnActiveTab(gatewayUrl, gatewayToken) {
   // Toggle follow mode off
   if (followMode) {
     await setFollowMode(false)
@@ -506,11 +506,11 @@ export async function toggleRelayOnActiveTab(port, gatewayToken) {
   if (!active?.id) return { ok: false, error: 'No browsable tab found' }
   const tabId = active.id
 
-  _scheduleReconnectPort = port
+  _scheduleReconnectGatewayUrl = gatewayUrl
   _scheduleReconnectToken = gatewayToken
 
   try {
-    await ensureRelayConnection(port, gatewayToken)
+    await ensureRelayConnection(gatewayUrl, gatewayToken)
   } catch (e) {
     return { ok: false, error: e.message }
   }
@@ -533,13 +533,13 @@ export async function toggleRelayOnActiveTab(port, gatewayToken) {
 
 // ─── Auto-relay on side panel open ───────────────────────────────────────────
 
-export async function autoStartRelay(port, gatewayToken) {
+export async function autoStartRelay(gatewayUrl, gatewayToken) {
   if (!gatewayToken) return
-  _scheduleReconnectPort = port
+  _scheduleReconnectGatewayUrl = gatewayUrl
   _scheduleReconnectToken = gatewayToken
 
   try {
-    await ensureRelayConnection(port, gatewayToken)
+    await ensureRelayConnection(gatewayUrl, gatewayToken)
   } catch {
     scheduleReconnect()
   }
@@ -701,14 +701,14 @@ export function onTabTitleChanged(tabId) {
   if (tab?.state === 'connected') void broadcastStatus()
 }
 
-export async function relayKeepalive(port, gatewayToken) {
+export async function relayKeepalive(gatewayUrl, gatewayToken) {
   if (tabs.size === 0) return
   for (const [tabId, tab] of tabs.entries()) {
     if (tab.state === 'connected') setBadge(tabId, relayWs && relayWs.readyState === WebSocket.OPEN ? 'on' : 'connecting')
   }
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
     if (!relayConnectPromise && !reconnectTimer && gatewayToken) {
-      await ensureRelayConnection(port, gatewayToken).catch(() => { if (!reconnectTimer) scheduleReconnect() })
+      await ensureRelayConnection(gatewayUrl, gatewayToken).catch(() => { if (!reconnectTimer) scheduleReconnect() })
     }
   }
   void broadcastStatus()

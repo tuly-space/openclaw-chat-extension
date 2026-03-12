@@ -8,11 +8,10 @@ import * as relay from './relay.js'
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
 const SETTINGS_KEY = 'openclaw_settings_v1'
-const DEFAULT_RELAY_PORT = 18792
 
 async function getSettings() {
   const s = await chrome.storage.local.get(SETTINGS_KEY)
-  return { gatewayUrl: 'https://dash.tuly.space', token: '', agentId: 'main', relayPort: DEFAULT_RELAY_PORT, ...(s[SETTINGS_KEY] || {}) }
+  return { gatewayUrl: 'https://dash.tuly.space', token: '', agentId: 'main', ...(s[SETTINGS_KEY] || {}) }
 }
 
 // ─── Open side panel on click ─────────────────────────────────────────────────
@@ -115,8 +114,7 @@ async function handleChatStream(port, msg) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'RELAY_TOGGLE') {
     getSettings().then(s => {
-      const port = s.relayPort || DEFAULT_RELAY_PORT
-      relay.toggleRelayOnActiveTab(port, s.token)
+      relay.toggleRelayOnActiveTab(s.gatewayUrl, s.token)
         .then(result => sendResponse(result))
         .catch(e => sendResponse({ ok: false, error: e.message }))
     })
@@ -153,7 +151,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== 'keepalive') return
   await initPromise
   const s = await getSettings()
-  await relay.relayKeepalive(s.relayPort || DEFAULT_RELAY_PORT, s.token)
+  await relay.relayKeepalive(s.gatewayUrl, s.token)
 })
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -161,6 +159,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 const initPromise = relay.rehydrateRelayState().then(async () => {
   const s = await getSettings()
   if (s.token && relay.getAttachedTabCount() > 0) {
-    await relay.autoStartRelay(s.relayPort || DEFAULT_RELAY_PORT, s.token)
+    await relay.autoStartRelay(s.gatewayUrl, s.token)
   }
 })
