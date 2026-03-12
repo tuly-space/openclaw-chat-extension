@@ -65,6 +65,9 @@ const $hljsTheme     = document.getElementById("hljs-theme");
 const $btnTheme      = document.getElementById("btn-theme");
 const $btnFontUp     = document.getElementById("btn-font-up");
 const $btnFontDown   = document.getElementById("btn-font-down");
+const $btnClipSelection = document.getElementById("btn-clip-selection");
+const $btnClipPage   = document.getElementById("btn-clip-page");
+const $clipStatus    = document.getElementById("clip-status");
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -276,6 +279,52 @@ function hideError() { $errorBanner.classList.add("hidden"); }
 function setSendEnabled(v) { $btnSend.disabled = !v; }
 function updateSendButton() { $btnSend.disabled = (!$inputMsg.value.trim() && pendingAttachments.length === 0) || isStreaming || !settings?.token; }
 function setStatus(state, label) { $status.className = `dot ${state}`; if (label) $headerName.textContent = label; }
+
+function setClipStatus(message = "") {
+  $clipStatus.textContent = message;
+  $clipStatus.classList.toggle("hidden", !message);
+}
+
+function countChars(text) {
+  return text.replace(/\s+/g, "").length;
+}
+
+function fillInputWithClip({ title, url, text }) {
+  $inputMsg.value = `[CLIP from ${title}]\n${url}\n\n${text}`;
+  autoResize($inputMsg);
+  updateSendButton();
+  $inputMsg.focus();
+}
+
+async function requestClip(action) {
+  hideError();
+  setClipStatus("");
+  const response = await chrome.runtime.sendMessage({ action });
+  if (!response?.ok) {
+    showError(response?.error || "Clip failed");
+    return null;
+  }
+  return response;
+}
+
+async function clipSelection() {
+  const result = await requestClip("clipSelection");
+  if (!result) return;
+  const text = (result.text || "").trim();
+  if (!text) {
+    alert("请先在页面选中文字");
+    return;
+  }
+  fillInputWithClip({ title: result.title, url: result.url, text });
+}
+
+async function clipPage() {
+  const result = await requestClip("clipPage");
+  if (!result) return;
+  const text = (result.text || "").trim();
+  fillInputWithClip({ title: result.title, url: result.url, text });
+  setClipStatus(`已获取 ${countChars(text)}字`);
+}
 
 // ─── Load conversation into UI ────────────────────────────────────────────────
 
@@ -620,6 +669,8 @@ $btnRelay.addEventListener("click", async () => {
 });
 
 $btnAttach.addEventListener("click", () => $fileInput.click());
+$btnClipSelection.addEventListener("click", clipSelection);
+$btnClipPage.addEventListener("click", clipPage);
 $fileInput.addEventListener("change", async () => {
   if ($fileInput.files.length > 0) await addFiles($fileInput.files);
   $fileInput.value = "";

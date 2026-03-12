@@ -112,6 +112,20 @@ async function handleChatStream(port, msg) {
 // ─── Messages from side panel ─────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.action === 'clipSelection') {
+    handleClipRequest('getSelection')
+      .then(result => sendResponse(result))
+      .catch(e => sendResponse({ ok: false, error: e.message }))
+    return true
+  }
+
+  if (msg.action === 'clipPage') {
+    handleClipRequest('getPageContent')
+      .then(result => sendResponse(result))
+      .catch(e => sendResponse({ ok: false, error: e.message }))
+    return true
+  }
+
   if (msg.type === 'RELAY_TOGGLE') {
     getSettings().then(s => {
       relay.toggleRelayOnActiveTab(s.gatewayUrl, s.token)
@@ -127,6 +141,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
 })
+
+async function handleClipRequest(action) {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true })
+  if (!tab?.id) return { ok: false, error: 'No active tab found' }
+  if (!/^https?:/i.test(tab.url || '')) {
+    return { ok: false, error: 'Clip only works on regular web pages' }
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['clipper.js'],
+    })
+  } catch (e) {
+    return { ok: false, error: e.message || 'Failed to inject clipper' }
+  }
+
+  try {
+    const result = await chrome.tabs.sendMessage(tab.id, { action })
+    return { ok: true, ...result }
+  } catch (e) {
+    return { ok: false, error: e.message || 'Failed to read page content' }
+  }
+}
 
 // ─── Relay: debugger + tab lifecycle ─────────────────────────────────────────
 
