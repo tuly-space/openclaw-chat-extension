@@ -136,6 +136,10 @@ export function getAttachedTabCount() {
   return n
 }
 
+// Resolves when the OpenClaw protocol handshake (connect req/res) completes
+let handshakeResolve = null
+let handshakeReject = null
+
 export async function ensureRelayConnection(gatewayUrl, gatewayToken) {
   if (relayWs && relayWs.readyState === WebSocket.OPEN) return
   if (relayConnectPromise) return await relayConnectPromise
@@ -149,11 +153,26 @@ export async function ensureRelayConnection(gatewayUrl, gatewayToken) {
 
     ws.onmessage = (evt) => onRelayMessage(String(evt.data || ''))
 
+    // Wait for TCP/WS open
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('WebSocket connect timeout')), 5000)
       ws.onopen = () => { clearTimeout(t); resolve() }
       ws.onerror = () => { clearTimeout(t); reject(new Error('WebSocket connect failed')) }
       ws.onclose = (ev) => { clearTimeout(t); reject(new Error(`WebSocket closed (${ev.code})`)) }
+    })
+
+    // Wait for OpenClaw protocol handshake (challenge → connect req → res)
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => {
+        handshakeResolve = null
+        handshakeReject = null
+        reject(new Error('Handshake timeout'))
+      }, 8000)
+      handshakeResolve = () => { clearTimeout(t); handshakeResolve = null; handshakeReject = null; resolve() }
+      handshakeReject = (e) => { clearTimeout(t); handshakeResolve = null; handshakeReject = null; reject(e) }
+      // Handle WS close before handshake completes
+      const origOnClose = ws.onclose
+      ws.onclose = (ev) => { handshakeReject?.(new Error(`WS closed before handshake (${ev.code})`)); origOnClose?.(ev) }
     })
 
     ws.onclose = () => { if (ws === relayWs) onRelayClosed('closed') }
@@ -322,14 +341,20 @@ async function onRelayMessage(text) {
   if (msg?.type === 'event' && msg.event === 'connect.challenge') {
     try { ensureGatewayHandshakeStarted(msg.payload) } catch (e) {
       relayConnectRequestId = null
-      relayWs?.close(1008, 'gateway connect failed')
+      handshakeReject?.(new Error('gateway connect failed'))
+      relayWs?.close(4008, 'gateway connect failed')
     }
     return
   }
 
   if (msg?.type === 'res' && relayConnectRequestId && msg.id === relayConnectRequestId) {
     relayConnectRequestId = null
-    if (!msg.ok) relayWs?.close(1008, 'gateway connect rejected')
+    if (!msg.ok) {
+      handshakeReject?.(new Error('gateway connect rejected'))
+      relayWs?.close(4008, 'gateway connect rejected')
+    } else {
+      handshakeResolve?.()
+    }
     return
   }
 
