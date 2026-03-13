@@ -161,7 +161,19 @@ export async function ensureRelayConnection(gatewayUrl, gatewayToken) {
       ws.onclose = (ev) => { clearTimeout(t); reject(new Error(`WebSocket closed (${ev.code})`)) }
     })
 
-    // Wait for OpenClaw protocol handshake (challenge → connect req → res)
+    // Start OpenClaw protocol handshake immediately on open.
+    // The gateway also emits connect.challenge right away, but waiting for it
+    // adds an unnecessary round-trip and increases the chance of missing the
+    // 3s gateway handshake window on remote connections.
+    try {
+      ensureGatewayHandshakeStarted()
+    } catch (e) {
+      throw new Error(e?.message || 'Failed to start handshake')
+    }
+
+    // Wait for OpenClaw protocol handshake (connect req → res).
+    // If a connect.challenge arrives first, onRelayMessage() will call the same
+    // starter again, which is safe because ensureGatewayHandshakeStarted() is idempotent.
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => {
         handshakeResolve = null
