@@ -1,23 +1,21 @@
 /**
  * relay.js — Browser relay module (merged from OpenClaw Browser Relay extension)
  *
- * Connects to the configured OpenClaw gateway relay endpoint
- * and bridges CDP commands to/from attached Chrome tabs via chrome.debugger.
- *
- * Relay token is derived: HMAC-SHA256("openclaw-extension-relay-v1:<gatewayUrl>", gatewayToken)
+ * Connects to the OpenClaw local relay server exposed via relay.tuly.space.
+ * Token is derived: HMAC-SHA256("openclaw-extension-relay-v1:<relayPort>", gatewayToken)
+ * matching the openclaw relay server's expected format (port number as context).
  */
 
-// ─── Gateway URL helpers ──────────────────────────────────────────────────────
+// ─── Relay URL & port ─────────────────────────────────────────────────────────
 
-function gatewayUrlToRelayWs(gatewayUrl) {
-  const url = new URL(String(gatewayUrl))
-  const scheme = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${scheme}//${url.host}/extension`
-}
+// The local relay server port (gateway port + 3: 18789 + 3 = 18792).
+// The relay server is exposed publicly at relay.tuly.space via Cloudflare Tunnel.
+const RELAY_PORT = 18792
+const RELAY_WS_URL = 'wss://relay.tuly.space/extension'
 
 // ─── Token derivation ─────────────────────────────────────────────────────────
 
-export async function deriveRelayToken(gatewayToken, gatewayUrl) {
+export async function deriveRelayToken(gatewayToken, port) {
   const enc = new TextEncoder()
   const key = await crypto.subtle.importKey(
     'raw',
@@ -29,17 +27,16 @@ export async function deriveRelayToken(gatewayToken, gatewayUrl) {
   const sig = await crypto.subtle.sign(
     'HMAC',
     key,
-    enc.encode(`openclaw-extension-relay-v1:${gatewayUrl}`)
+    enc.encode(`openclaw-extension-relay-v1:${port}`)
   )
   return [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-export async function buildRelayWsUrl(gatewayUrl, gatewayToken) {
+export async function buildRelayWsUrl(_gatewayUrl, gatewayToken) {
   const token = String(gatewayToken || '').trim()
   if (!token) throw new Error('Missing gatewayToken')
-  const relayToken = await deriveRelayToken(token, gatewayUrl)
-  const baseUrl = gatewayUrlToRelayWs(gatewayUrl)
-  return `${baseUrl}?token=${encodeURIComponent(relayToken)}`
+  const relayToken = await deriveRelayToken(token, RELAY_PORT)
+  return `${RELAY_WS_URL}?token=${encodeURIComponent(relayToken)}`
 }
 
 function reconnectDelayMs(attempt, opts = {}) {
@@ -336,7 +333,7 @@ function ensureGatewayHandshakeStarted(_payload) {
     type: 'req', id: relayConnectRequestId, method: 'connect',
     params: {
       minProtocol: 3, maxProtocol: 3,
-      client: { id: 'webchat', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
+      client: { id: 'chrome-relay-extension', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
       role: 'operator', scopes: ['operator.read', 'operator.write'],
       caps: [], commands: [],
       auth: relayGatewayToken ? { token: relayGatewayToken } : undefined,
