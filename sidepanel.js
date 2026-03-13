@@ -670,11 +670,11 @@ $btnRelay.addEventListener("click", async () => {
       const title = result.tabTitle;
       const url = result.tabUrl;
       if (title && url) {
-        $inputMsg.value = `relaying "${title}" at ${url}`;
+        $inputMsg.value = `relaying "${title}" at ${url}\n`;
       } else if (url) {
-        $inputMsg.value = `relaying ${url}`;
+        $inputMsg.value = `relaying ${url}\n`;
       } else {
-        $inputMsg.value = 'relaying current tab';
+        $inputMsg.value = 'relaying current tab\n';
       }
       autoResize($inputMsg);
       $inputMsg.focus();
