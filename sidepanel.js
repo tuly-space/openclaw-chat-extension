@@ -667,7 +667,16 @@ $btnRelay.addEventListener("click", async () => {
     setTimeout(() => { hideError(); setRelayStatus("off"); }, 3000);
   } else if (result?.attached) {
     if (!$inputMsg.value.trim()) {
-      $inputMsg.value = 'Browse the current tab and tell me what you see.';
+      const title = result.tabTitle;
+      const url = result.tabUrl;
+      if (title && url) {
+        $inputMsg.value = `relaying "${title}" at ${url}`;
+      } else if (url) {
+        $inputMsg.value = `relaying ${url}`;
+      } else {
+        $inputMsg.value = 'relaying current tab';
+      }
+      autoResize($inputMsg);
       $inputMsg.focus();
     }
   }

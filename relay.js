@@ -545,7 +545,8 @@ export async function toggleRelayOnActiveTab(gatewayUrl, gatewayToken) {
     await attachTab(tabId)
     await setFollowMode(true)
     void broadcastStatus()
-    return { ok: true, attached: true }
+    const tabInfo = await chrome.tabs.get(tabId).catch(() => null)
+    return { ok: true, attached: true, tabTitle: tabInfo?.title || null, tabUrl: tabInfo?.url || null }
   } catch (e) {
     tabs.delete(tabId)
     return { ok: false, error: e.message }
