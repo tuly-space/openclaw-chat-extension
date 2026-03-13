@@ -665,6 +665,11 @@ $btnRelay.addEventListener("click", async () => {
     setRelayStatus("error");
     showError(result?.error || "Relay toggle failed");
     setTimeout(() => { hideError(); setRelayStatus("off"); }, 3000);
+  } else if (result?.attached) {
+    if (!$inputMsg.value.trim()) {
+      $inputMsg.value = 'Browse the current tab and tell me what you see.';
+      $inputMsg.focus();
+    }
   }
 });
 
