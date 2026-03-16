@@ -64,7 +64,7 @@ async function ensureGatewayWs(settings) {
           params: {
             minProtocol: 3, maxProtocol: 3,
             client: { id: 'webchat', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
-            role: 'operator', scopes: ['operator.read', 'operator.write'],
+            role: 'operator', scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
             caps: [], commands: [],
             auth: { token: settings.token },
           },
@@ -124,7 +124,7 @@ async function ensureGatewayWs(settings) {
         params: {
           minProtocol: 3, maxProtocol: 3,
           client: { id: 'webchat', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
-          role: 'operator', scopes: ['operator.read', 'operator.write'],
+          role: 'operator', scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
           caps: [], commands: [],
           auth: { token: settings.token },
         },
