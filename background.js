@@ -56,19 +56,9 @@ async function ensureGatewayWs(settings) {
       let msg
       try { msg = JSON.parse(evt.data) } catch { return }
 
-      // Handshake: connect.challenge → send connect req
+      // Handshake: gateway sends connect.challenge, but we already sent connect on open.
+      // Ignore the challenge — our connect req is already in flight.
       if (!handshakeDone && msg?.type === 'event' && msg.event === 'connect.challenge') {
-        reqId = `chat-${Date.now()}`
-        ws.send(JSON.stringify({
-          type: 'req', id: reqId, method: 'connect',
-          params: {
-            minProtocol: 3, maxProtocol: 3,
-            client: { id: 'webchat', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
-            role: 'operator', scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
-            caps: [], commands: [],
-            auth: { token: settings.token },
-          },
-        }))
         return
       }
 
@@ -117,7 +107,7 @@ async function ensureGatewayWs(settings) {
 
     ws.onopen = () => {
       console.log('[chat-ws] connected to', gatewayWsUrl(settings))
-      // Immediately send connect (gateway will also send challenge, but sending early is fine)
+      // Send connect immediately on open with full operator scopes
       reqId = `chat-${Date.now()}`
       ws.send(JSON.stringify({
         type: 'req', id: reqId, method: 'connect',
