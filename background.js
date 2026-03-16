@@ -77,9 +77,12 @@ async function ensureGatewayWs(settings) {
         if (msg.ok) {
           handshakeDone = true
           gatewayWsReady = true
+          console.log('[chat-ws] handshake OK')
           resolve()
         } else {
-          reject(new Error(msg.error?.message || 'Gateway connect rejected'))
+          const err = msg.error?.message || 'Gateway connect rejected'
+          console.warn('[chat-ws] handshake rejected:', err)
+          reject(new Error(err))
           ws.close()
         }
         return
@@ -113,6 +116,7 @@ async function ensureGatewayWs(settings) {
     }
 
     ws.onopen = () => {
+      console.log('[chat-ws] connected to', gatewayWsUrl(settings))
       // Immediately send connect (gateway will also send challenge, but sending early is fine)
       reqId = `chat-${Date.now()}`
       ws.send(JSON.stringify({
@@ -127,12 +131,14 @@ async function ensureGatewayWs(settings) {
       }))
     }
 
-    ws.onerror = () => {
+    ws.onerror = (e) => {
+      console.warn('[chat-ws] error', e)
       if (!handshakeDone) reject(new Error('Gateway WebSocket connect failed'))
       onGatewayWsClosed()
     }
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
+      console.log('[chat-ws] closed', ev.code, ev.reason)
       if (!handshakeDone) reject(new Error('Gateway WebSocket closed before handshake'))
       onGatewayWsClosed()
     }
@@ -383,6 +389,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 const initPromise = relay.rehydrateRelayState().then(async () => {
   const s = await getSettings()
+  // Pre-connect gateway WS if token is configured
+  if (s.token) {
+    ensureGatewayWs(s).catch(e => console.warn('[chat-ws] pre-connect failed:', e.message))
+  }
   if (s.token && relay.getAttachedTabCount() > 0) {
     await relay.autoStartRelay(s.gatewayUrl, s.token)
   }
