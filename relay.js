@@ -10,7 +10,7 @@
 
 // The local relay server port (gateway port + 2: 18789 + 2 = 18791).
 // Connects directly to the local relay server (loopback only, by design).
-const RELAY_PORT = 18791
+const RELAY_PORT = 18792
 const RELAY_WS_URL = `ws://127.0.0.1:${RELAY_PORT}/extension`
 
 // ─── Token derivation ─────────────────────────────────────────────────────────
