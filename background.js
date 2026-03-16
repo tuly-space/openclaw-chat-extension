@@ -1,6 +1,6 @@
 /**
  * background.js — Service worker
- * Handles: chat streaming (CORS bypass) + browser relay (CDP bridge)
+ * Handles: chat streaming (gateway WS) + browser relay (CDP bridge)
  */
 
 import * as relay from './relay.js'
@@ -20,7 +20,173 @@ chrome.action.onClicked.addListener(async (tab) => {
   await chrome.sidePanel.open({ tabId: tab.id })
 })
 
-// ─── Chat: long-lived port for SSE streaming ──────────────────────────────────
+// ─── Gateway WebSocket (for chat) ─────────────────────────────────────────────
+
+let gatewayWs = null
+let gatewayWsReady = false
+let gwPendingRequests = new Map()   // reqId → { resolve, reject }
+let gwAgentListeners = new Map()    // sessionKey → Set<(event) => void>
+let gwReconnectTimer = null
+let gwSettings = null
+let gwConnectPromise = null
+
+function gatewayWsUrl(settings) {
+  const url = new URL(settings.gatewayUrl)
+  const scheme = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${scheme}//${url.host}/`
+}
+
+async function ensureGatewayWs(settings) {
+  if (gatewayWs && gatewayWsReady) return
+
+  if (gwConnectPromise) return gwConnectPromise
+
+  gwConnectPromise = new Promise((resolve, reject) => {
+    if (gwReconnectTimer) { clearTimeout(gwReconnectTimer); gwReconnectTimer = null }
+
+    const ws = new WebSocket(gatewayWsUrl(settings))
+    gatewayWs = ws
+    gwSettings = settings
+    gatewayWsReady = false
+
+    let handshakeDone = false
+    let reqId = null
+
+    ws.onmessage = (evt) => {
+      let msg
+      try { msg = JSON.parse(evt.data) } catch { return }
+
+      // Handshake: connect.challenge → send connect req
+      if (!handshakeDone && msg?.type === 'event' && msg.event === 'connect.challenge') {
+        reqId = `chat-${Date.now()}`
+        ws.send(JSON.stringify({
+          type: 'req', id: reqId, method: 'connect',
+          params: {
+            minProtocol: 3, maxProtocol: 3,
+            client: { id: 'webchat', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
+            role: 'operator', scopes: ['operator.read', 'operator.write'],
+            caps: [], commands: [],
+            auth: { token: settings.token },
+          },
+        }))
+        return
+      }
+
+      // Handshake response
+      if (!handshakeDone && msg?.type === 'res' && msg.id === reqId) {
+        if (msg.ok) {
+          handshakeDone = true
+          gatewayWsReady = true
+          resolve()
+        } else {
+          reject(new Error(msg.error?.message || 'Gateway connect rejected'))
+          ws.close()
+        }
+        return
+      }
+
+      // Request responses
+      if (msg?.type === 'res' && gwPendingRequests.has(msg.id)) {
+        const p = gwPendingRequests.get(msg.id)
+        gwPendingRequests.delete(msg.id)
+        if (msg.ok) p.resolve(msg.result)
+        else p.reject(new Error(msg.error?.message || 'Gateway request failed'))
+        return
+      }
+
+      // Agent events (chat streaming)
+      if (msg?.type === 'event' && msg.event === 'agent') {
+        const payload = msg.payload
+        const sk = payload?.sessionKey
+        if (sk && gwAgentListeners.has(sk)) {
+          for (const fn of gwAgentListeners.get(sk)) {
+            try { fn(payload) } catch {}
+          }
+        }
+        return
+      }
+
+      // ping
+      if (msg?.method === 'ping') {
+        try { ws.send(JSON.stringify({ method: 'pong' })) } catch {}
+      }
+    }
+
+    ws.onopen = () => {
+      // Immediately send connect (gateway will also send challenge, but sending early is fine)
+      reqId = `chat-${Date.now()}`
+      ws.send(JSON.stringify({
+        type: 'req', id: reqId, method: 'connect',
+        params: {
+          minProtocol: 3, maxProtocol: 3,
+          client: { id: 'webchat', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
+          role: 'operator', scopes: ['operator.read', 'operator.write'],
+          caps: [], commands: [],
+          auth: { token: settings.token },
+        },
+      }))
+    }
+
+    ws.onerror = () => {
+      if (!handshakeDone) reject(new Error('Gateway WebSocket connect failed'))
+      onGatewayWsClosed()
+    }
+
+    ws.onclose = () => {
+      if (!handshakeDone) reject(new Error('Gateway WebSocket closed before handshake'))
+      onGatewayWsClosed()
+    }
+
+    setTimeout(() => {
+      if (!handshakeDone) {
+        reject(new Error('Gateway handshake timeout'))
+        ws.close()
+      }
+    }, 8000)
+  }).finally(() => { gwConnectPromise = null })
+
+  return gwConnectPromise
+}
+
+function onGatewayWsClosed() {
+  if (gatewayWs) { try { gatewayWs.close() } catch {} }
+  gatewayWs = null
+  gatewayWsReady = false
+  // Reject all pending requests
+  for (const [, p] of gwPendingRequests) p.reject(new Error('Gateway WS disconnected'))
+  gwPendingRequests.clear()
+  // Notify all agent listeners (empty payload = disconnected)
+  for (const [, fns] of gwAgentListeners) {
+    for (const fn of fns) { try { fn(null) } catch {} }
+  }
+  gwAgentListeners.clear()
+}
+
+function gwRequest(method, params) {
+  return new Promise((resolve, reject) => {
+    if (!gatewayWs || !gatewayWsReady) return reject(new Error('Gateway WS not connected'))
+    const id = `req-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    gwPendingRequests.set(id, { resolve, reject })
+    setTimeout(() => {
+      if (gwPendingRequests.has(id)) {
+        gwPendingRequests.delete(id)
+        reject(new Error('Gateway request timeout'))
+      }
+    }, 30000)
+    gatewayWs.send(JSON.stringify({ type: 'req', id, method, params }))
+  })
+}
+
+function subscribeAgentEvents(sessionKey, fn) {
+  if (!gwAgentListeners.has(sessionKey)) gwAgentListeners.set(sessionKey, new Set())
+  gwAgentListeners.get(sessionKey).add(fn)
+  return () => {
+    const fns = gwAgentListeners.get(sessionKey)
+    if (fns) { fns.delete(fn); if (!fns.size) gwAgentListeners.delete(sessionKey) }
+  }
+}
+
+// ─── Chat: long-lived port for WS streaming ───────────────────────────────────
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'chat') {
@@ -31,11 +197,9 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 
   if (port.name === 'relay-status') {
-    // Side panel subscribes to relay status updates
     relay.onRelayStatus((status) => {
       try { port.postMessage({ type: 'RELAY_STATUS', ...status }) } catch {}
     })
-    // Send current status immediately
     port.postMessage({
       type: 'RELAY_STATUS',
       connected: relay.getRelayConnected(),
@@ -45,68 +209,97 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 })
 
-// ─── Chat streaming ───────────────────────────────────────────────────────────
+// ─── Chat streaming via Gateway WS ────────────────────────────────────────────
 
 async function handleChatStream(port, msg) {
-  // `messages` = full conversation history; `text` = latest user message (legacy fallback)
-  const { text, messages, settings, sessionKey } = msg
-  const ac = new AbortController()
+  const { messages, text, settings, sessionKey } = msg
+  let aborted = false
+  let unsubscribe = null
 
-  port.onDisconnect.addListener(() => ac.abort())
+  port.onDisconnect.addListener(() => {
+    aborted = true
+    if (unsubscribe) unsubscribe()
+  })
 
   try {
-    const agentId = settings.agentId || 'main'
-    const chatMessages = messages || [{ role: 'user', content: text }]
-    const res = await fetch(`${settings.gatewayUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${settings.token}`,
-        'Content-Type': 'application/json',
-        'x-openclaw-session-key': sessionKey,
-      },
-      body: JSON.stringify({
-        model: `openclaw:${agentId}`,
-        messages: chatMessages,
-        stream: true,
-      }),
-      signal: ac.signal,
-    })
+    await ensureGatewayWs(settings)
+  } catch (e) {
+    port.postMessage({ type: 'ERROR', message: `Gateway connect failed: ${e.message}` })
+    return
+  }
 
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      port.postMessage({ type: 'ERROR', message: `HTTP ${res.status}: ${body.slice(0, 200)}` })
+  if (aborted) return
+
+  const agentId = settings.agentId || 'main'
+  const chatMessages = messages || [{ role: 'user', content: text }]
+  const lastMsg = chatMessages[chatMessages.length - 1]
+
+  // Build idempotency key
+  const idempotencyKey = `ext-${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+  // Subscribe to agent events for this session before sending
+  let started = false
+  let doneReceived = false
+
+  unsubscribe = subscribeAgentEvents(sessionKey, (payload) => {
+    if (aborted) return
+    if (payload === null) {
+      // WS disconnected
+      if (!doneReceived) port.postMessage({ type: 'ERROR', message: 'Gateway disconnected' })
       return
     }
 
-    port.postMessage({ type: 'START' })
+    const kind = payload?.kind
+    const text = payload?.text ?? payload?.delta ?? payload?.chunk ?? ''
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop()
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed === 'data: [DONE]') continue
-        if (!trimmed.startsWith('data: ')) continue
-        try {
-          const chunk = JSON.parse(trimmed.slice(6))
-          const delta = chunk.choices?.[0]?.delta?.content
-          if (delta) port.postMessage({ type: 'DELTA', delta })
-        } catch {}
-      }
+    if (!started && kind === 'text' && text) {
+      started = true
+      port.postMessage({ type: 'START' })
     }
 
-    port.postMessage({ type: 'DONE' })
+    if (kind === 'text' && text) {
+      if (!started) { started = true; port.postMessage({ type: 'START' }) }
+      port.postMessage({ type: 'DELTA', delta: text })
+      return
+    }
+
+    if (kind === 'done' || kind === 'end' || payload?.status === 'done') {
+      doneReceived = true
+      if (unsubscribe) { unsubscribe(); unsubscribe = null }
+      if (started) port.postMessage({ type: 'DONE' })
+      else { port.postMessage({ type: 'START' }); port.postMessage({ type: 'DONE' }) }
+      return
+    }
+
+    if (kind === 'error') {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null }
+      port.postMessage({ type: 'ERROR', message: payload?.message || 'Agent error' })
+      return
+    }
+  })
+
+  // Send the message via chat.send
+  try {
+    await gwRequest('chat.send', {
+      to: agentId,
+      message: typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content),
+      sessionKey,
+      agentId,
+      idempotencyKey,
+    })
   } catch (e) {
-    if (e.name === 'AbortError') port.postMessage({ type: 'ABORTED' })
-    else port.postMessage({ type: 'ERROR', message: e.message })
+    if (unsubscribe) { unsubscribe(); unsubscribe = null }
+    port.postMessage({ type: 'ERROR', message: e.message })
+    return
   }
+
+  // Start a safety timeout — if no done event in 3 minutes, finish
+  setTimeout(() => {
+    if (!doneReceived && !aborted) {
+      if (unsubscribe) { unsubscribe(); unsubscribe = null }
+      port.postMessage({ type: 'DONE' })
+    }
+  }, 180000)
 }
 
 // ─── Messages from side panel ─────────────────────────────────────────────────
@@ -132,14 +325,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         .then(result => sendResponse(result))
         .catch(e => sendResponse({ ok: false, error: e.message }))
     })
-    return true // async
+    return true
   }
 
   if (msg.type === 'RELAY_STATUS_GET') {
     sendResponse({ connected: relay.getRelayConnected(), attachedTabs: relay.getAttachedTabCount() })
     return false
   }
-
 })
 
 async function handleClipRequest(action) {
@@ -148,16 +340,11 @@ async function handleClipRequest(action) {
   if (!/^https?:/i.test(tab.url || '')) {
     return { ok: false, error: 'Clip only works on regular web pages' }
   }
-
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['clipper.js'],
-    })
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['clipper.js'] })
   } catch (e) {
     return { ok: false, error: e.message || 'Failed to inject clipper' }
   }
-
   try {
     const result = await chrome.tabs.sendMessage(tab.id, { action })
     return { ok: true, ...result }
