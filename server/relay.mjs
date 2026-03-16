@@ -16,7 +16,12 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import http from 'node:http'
 
-const CONTROL_UI_CLIENT_ID = 'openclaw-control-ui'
+// Use backend client identity so gateway treats this as a local backend client:
+// - No origin check (not control-ui or webchat)
+// - shouldSkipBackendSelfPairing = true (isLocalClient + no Origin header + token auth)
+// - Scopes not cleared (not webchat, not unbound device-less client)
+const BACKEND_CLIENT_ID = 'gateway-client'
+const BACKEND_CLIENT_MODE = 'backend'
 
 const PORT = parseInt(process.env.OC_RELAY_PORT || '18790', 10)
 const GATEWAY_URL = process.env.OC_GATEWAY_URL || null
@@ -52,11 +57,9 @@ wss.on('connection', (clientWs, req) => {
   const connId = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
   console.log(`[relay] client connected conn=${connId}`)
 
-  // Forward Origin header from extension so gateway origin check passes
-  const forwardHeaders = {}
-  if (req.headers.origin) forwardHeaders.origin = req.headers.origin
-
-  const gatewayWs = new WebSocket(gatewayUrl, { headers: forwardHeaders })
+  // Do NOT forward Origin header — backend clients connect without Origin,
+  // which is required for shouldSkipBackendSelfPairing to fire correctly.
+  const gatewayWs = new WebSocket(gatewayUrl)
 
   let clientBuffer = []
   let gatewayBuffer = []
@@ -70,12 +73,15 @@ wss.on('connection', (clientWs, req) => {
     let frame
     try { frame = JSON.parse(raw) } catch { frame = null }
 
-    // Intercept connect request: rewrite client.id to openclaw-control-ui
+    // Intercept connect request: rewrite to backend client identity
+    // gateway-client + mode=backend + no Origin + localhost → shouldSkipBackendSelfPairing=true
     if (frame?.type === 'req' && frame?.method === 'connect') {
       if (frame.params?.client) {
         const originalId = frame.params.client.id
-        frame.params.client.id = CONTROL_UI_CLIENT_ID
-        console.log(`[relay] conn=${connId} connect: rewrote client.id ${originalId} → ${CONTROL_UI_CLIENT_ID}`)
+        const originalMode = frame.params.client.mode
+        frame.params.client.id = BACKEND_CLIENT_ID
+        frame.params.client.mode = BACKEND_CLIENT_MODE
+        console.log(`[relay] conn=${connId} connect: rewrote client id=${originalId}→${BACKEND_CLIENT_ID} mode=${originalMode}→${BACKEND_CLIENT_MODE}`)
       }
       const patched = JSON.stringify(frame)
       if (gatewayReady) {
