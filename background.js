@@ -188,13 +188,6 @@ let gatewayClient = null
 let agentListeners = new Map()   // sessionKey → Set<fn>
 
 function getGatewayWsUrl(gatewayUrl) {
-  // Route through local relay (server/relay.mjs) which rewrites client.id
-  // to 'openclaw-control-ui' so gateway retains declared scopes.
-  // Relay listens on ws://127.0.0.1:18790 and forwards to the real gateway.
-  return 'ws://127.0.0.1:18790'
-}
-
-function getRealGatewayWsUrl(gatewayUrl) {
   const u = new URL(gatewayUrl)
   return `${u.protocol === 'https:' ? 'wss:' : 'ws:'}//${u.host}/`
 }
