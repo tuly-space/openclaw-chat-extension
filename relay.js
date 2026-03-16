@@ -9,9 +9,9 @@
 // ─── Relay URL & port ─────────────────────────────────────────────────────────
 
 // The local relay server port (gateway port + 2: 18789 + 2 = 18791).
-// The relay server is exposed publicly at relay.tuly.space via Cloudflare Tunnel.
+// Connects directly to the local relay server (loopback only, by design).
 const RELAY_PORT = 18791
-const RELAY_WS_URL = 'wss://relay.tuly.space/extension'
+const RELAY_WS_URL = `ws://127.0.0.1:${RELAY_PORT}/extension`
 
 // ─── Token derivation ─────────────────────────────────────────────────────────
 
@@ -38,6 +38,9 @@ export async function buildRelayWsUrl(_gatewayUrl, gatewayToken) {
   const relayToken = await deriveRelayToken(token, RELAY_PORT)
   return `${RELAY_WS_URL}?token=${encodeURIComponent(relayToken)}`
 }
+
+// Export relay port for settings UI
+export const RELAY_SERVER_PORT = RELAY_PORT
 
 function reconnectDelayMs(attempt, opts = {}) {
   const baseMs = opts.baseMs ?? 1000
