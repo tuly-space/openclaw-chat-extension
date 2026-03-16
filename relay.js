@@ -8,9 +8,9 @@
 
 // ─── Relay URL & port ─────────────────────────────────────────────────────────
 
-// The local relay server port (gateway port + 3: 18789 + 3 = 18792).
+// The local relay server port (gateway port + 2: 18789 + 2 = 18791).
 // The relay server is exposed publicly at relay.tuly.space via Cloudflare Tunnel.
-const RELAY_PORT = 18792
+const RELAY_PORT = 18791
 const RELAY_WS_URL = 'wss://relay.tuly.space/extension'
 
 // ─── Token derivation ─────────────────────────────────────────────────────────
