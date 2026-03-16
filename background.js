@@ -115,7 +115,7 @@ class GatewayClient {
         mode: 'webchat',
       },
       role: 'operator',
-      scopes: ['operator.admin', 'operator.approvals', 'operator.pairing'],
+      scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
       caps: ['tool-events'],
       auth,
     }
@@ -202,7 +202,7 @@ async function ensureGatewayClient(settings) {
     token: settings.token,
     clientName: 'webchat',
     onEvent: (evt) => {
-      if (evt.event === 'agent') {
+      if (evt.event === 'chat') {
         const sk = evt.payload?.sessionKey
         if (sk && agentListeners.has(sk)) {
           for (const fn of agentListeners.get(sk)) {
@@ -311,7 +311,11 @@ async function handleChatStream(port, msg) {
     port.postMessage({ type })
   }
 
-  // Subscribe to agent events for this session
+  // Subscribe to chat events for this session.
+  // Gateway chat events use state: 'delta' | 'final' | 'aborted' | 'error'.
+  // Delta payloads carry cumulative text in message.content[0].text (not incremental),
+  // so we track the last sent length and compute the new suffix ourselves.
+  let lastSentLength = 0
   unsubscribe = subscribeAgent(sessionKey, (payload) => {
     if (aborted) return
 
@@ -321,25 +325,45 @@ async function handleChatStream(port, msg) {
       return
     }
 
-    const kind = payload?.kind
-    const delta = payload?.text ?? payload?.delta ?? ''
+    const state = payload?.state
 
-    if (kind === 'text' && delta) {
+    if (state === 'delta') {
+      // Extract cumulative text from message.content[0].text
+      const msg = payload?.message
+      let fullText = ''
+      if (msg && Array.isArray(msg.content) && msg.content.length > 0) {
+        const block = msg.content[0]
+        if (block?.type === 'text' && typeof block.text === 'string') {
+          fullText = block.text
+        }
+      } else if (typeof msg?.text === 'string') {
+        fullText = msg.text
+      }
+      if (!fullText) return
+      const delta = fullText.slice(lastSentLength)
+      if (!delta) return
+      lastSentLength = fullText.length
       if (!started) { started = true; port.postMessage({ type: 'START' }) }
       port.postMessage({ type: 'DELTA', delta })
       return
     }
 
-    if (kind === 'done' || kind === 'end' || payload?.status === 'done') {
+    if (state === 'final') {
       doneReceived = true
       if (!started) { started = true; port.postMessage({ type: 'START' }) }
       finish('DONE')
       return
     }
 
-    if (kind === 'error') {
+    if (state === 'aborted') {
+      doneReceived = true
+      finish('ABORTED')
+      return
+    }
+
+    if (state === 'error') {
       finish('ERROR')
-      port.postMessage({ type: 'ERROR', message: payload?.message || 'Agent error' })
+      port.postMessage({ type: 'ERROR', message: payload?.errorMessage || 'Agent error' })
       return
     }
   })
