@@ -1,0 +1,13 @@
+{
+  "name": "openclaw-ext-relay",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "WebSocket relay: Chrome extension → OpenClaw gateway",
+  "main": "relay.mjs",
+  "scripts": {
+    "start": "node relay.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
