@@ -1,6 +1,6 @@
 /**
  * background.js — Service worker
- * Handles: chat streaming (gateway WS) + browser relay (CDP bridge)
+ * Handles: chat streaming (gateway WS, webchat protocol) + browser relay (CDP bridge)
  */
 
 import * as relay from './relay.js'
@@ -20,169 +20,237 @@ chrome.action.onClicked.addListener(async (tab) => {
   await chrome.sidePanel.open({ tabId: tab.id })
 })
 
-// ─── Gateway WebSocket (for chat) ─────────────────────────────────────────────
+// ─── Gateway WebSocket client (webchat protocol) ──────────────────────────────
+//
+// Copied from openclaw control-ui webchat client (th class in index-UvgeZ3yV.js).
+// Key behaviour:
+//   1. onopen → queueConnect (750ms delay, lets challenge arrive first)
+//   2. connect.challenge → sendConnect immediately (sets connectNonce)
+//   3. sendConnect guarded by connectSent flag (runs only once per WS)
+//   4. Scopes: operator.admin, operator.approvals, operator.pairing
+//   5. All responses dispatched via pending Map (reqId → {resolve, reject})
+//   6. All events dispatched via onEvent callback
 
-let gatewayWs = null
-let gatewayWsReady = false
-let gwPendingRequests = new Map()   // reqId → { resolve, reject }
-let gwAgentListeners = new Map()    // sessionKey → Set<(event) => void>
-let gwReconnectTimer = null
-let gwSettings = null
-let gwConnectPromise = null
+class GatewayClient {
+  constructor(opts) {
+    // opts: { url, token, clientName, onEvent, onHello, onClose }
+    this.opts = opts
+    this.ws = null
+    this.pending = new Map()
+    this.closed = false
+    this.lastSeq = null
+    this.connectNonce = null
+    this.connectSent = false
+    this.connectTimer = null
+    this.backoffMs = 800
+    this.pendingConnectError = null
+  }
 
-function gatewayWsUrl(settings) {
-  const url = new URL(settings.gatewayUrl)
-  const scheme = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${scheme}//${url.host}/`
+  get connected() {
+    return this.ws?.readyState === WebSocket.OPEN
+  }
+
+  start() {
+    this.closed = false
+    this._connect()
+  }
+
+  stop() {
+    this.closed = true
+    this.ws?.close()
+    this.ws = null
+    this._flushPending(new Error('gateway client stopped'))
+  }
+
+  _connect() {
+    if (this.closed) return
+    this.ws = new WebSocket(this.opts.url)
+    this.ws.addEventListener('open', () => this._queueConnect())
+    this.ws.addEventListener('message', (e) => this._handleMessage(String(e.data ?? '')))
+    this.ws.addEventListener('close', (e) => {
+      const reason = String(e.reason ?? '')
+      const err = this.pendingConnectError
+      this.pendingConnectError = null
+      this.ws = null
+      this._flushPending(new Error(`gateway closed (${e.code}): ${reason}`))
+      this.opts.onClose?.({ code: e.code, reason, error: err })
+      if (!this.closed) this._scheduleReconnect()
+    })
+    this.ws.addEventListener('error', () => {})
+  }
+
+  _scheduleReconnect() {
+    if (this.closed) return
+    const delay = this.backoffMs
+    this.backoffMs = Math.min(this.backoffMs * 1.7, 15000)
+    setTimeout(() => this._connect(), delay)
+  }
+
+  _flushPending(err) {
+    for (const [, p] of this.pending) p.reject(err)
+    this.pending.clear()
+  }
+
+  _queueConnect() {
+    this.connectNonce = null
+    this.connectSent = false
+    if (this.connectTimer !== null) clearTimeout(this.connectTimer)
+    // Wait 750ms — if challenge arrives first, sendConnect fires immediately
+    this.connectTimer = setTimeout(() => this._sendConnect(), 750)
+  }
+
+  async _sendConnect() {
+    if (this.connectSent) return
+    this.connectSent = true
+    if (this.connectTimer !== null) { clearTimeout(this.connectTimer); this.connectTimer = null }
+
+    const token = this.opts.token?.trim() || undefined
+    const auth = token ? { token } : undefined
+    const params = {
+      minProtocol: 3, maxProtocol: 3,
+      client: {
+        id: this.opts.clientName ?? 'webchat',
+        version: '0.4.0',
+        platform: 'chrome-extension',
+        mode: 'webchat',
+      },
+      role: 'operator',
+      scopes: ['operator.admin', 'operator.approvals', 'operator.pairing'],
+      caps: ['tool-events'],
+      auth,
+    }
+
+    try {
+      const res = await this.request('connect', params)
+      this.backoffMs = 800
+      this.opts.onHello?.(res)
+      console.log('[gateway-ws] connected')
+    } catch (e) {
+      this.pendingConnectError = e
+      console.warn('[gateway-ws] connect failed:', e.message)
+      this.ws?.close(4008, 'connect failed')
+    }
+  }
+
+  _handleMessage(raw) {
+    let msg
+    try { msg = JSON.parse(raw) } catch { return }
+
+    if (msg?.type === 'event') {
+      if (msg.event === 'connect.challenge') {
+        const nonce = typeof msg.payload?.nonce === 'string' ? msg.payload.nonce : null
+        if (nonce) this.connectNonce = nonce
+        this._sendConnect()
+        return
+      }
+      const seq = typeof msg.seq === 'number' ? msg.seq : null
+      if (seq !== null) {
+        if (this.lastSeq !== null && seq > this.lastSeq + 1) {
+          console.warn('[gateway-ws] sequence gap', this.lastSeq + 1, '->', seq)
+        }
+        this.lastSeq = seq
+      }
+      try { this.opts.onEvent?.(msg) } catch (e) { console.error('[gateway-ws] event handler error:', e) }
+      return
+    }
+
+    if (msg?.type === 'res') {
+      const p = this.pending.get(msg.id)
+      if (!p) return
+      this.pending.delete(msg.id)
+      if (msg.ok) p.resolve(msg.payload)
+      else p.reject(Object.assign(new Error(msg.error?.message ?? 'gateway error'), { gatewayCode: msg.error?.code, details: msg.error?.details }))
+      return
+    }
+
+    if (msg?.method === 'ping') {
+      try { this.ws?.send(JSON.stringify({ method: 'pong' })) } catch {}
+    }
+  }
+
+  request(method, params) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('gateway not connected'))
+    }
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const frame = { type: 'req', id, method, params }
+    const promise = new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject })
+    })
+    this.ws.send(JSON.stringify(frame))
+    return promise
+  }
 }
 
-async function ensureGatewayWs(settings) {
-  if (gatewayWs && gatewayWsReady) return
+// ─── Gateway client singleton ─────────────────────────────────────────────────
 
-  if (gwConnectPromise) return gwConnectPromise
+let gatewayClient = null
+let agentListeners = new Map()   // sessionKey → Set<fn>
 
-  gwConnectPromise = new Promise((resolve, reject) => {
-    if (gwReconnectTimer) { clearTimeout(gwReconnectTimer); gwReconnectTimer = null }
+function getGatewayWsUrl(gatewayUrl) {
+  const u = new URL(gatewayUrl)
+  return `${u.protocol === 'https:' ? 'wss:' : 'ws:'}//${u.host}/`
+}
 
-    const ws = new WebSocket(gatewayWsUrl(settings))
-    gatewayWs = ws
-    gwSettings = settings
-    gatewayWsReady = false
+async function ensureGatewayClient(settings) {
+  if (gatewayClient?.connected) return gatewayClient
 
-    let handshakeDone = false
-    let reqId = null
+  if (gatewayClient) { try { gatewayClient.stop() } catch {} }
 
-    ws.onmessage = (evt) => {
-      let msg
-      try { msg = JSON.parse(evt.data) } catch { return }
-
-      // Handshake: gateway sends connect.challenge, but we already sent connect on open.
-      // Ignore the challenge — our connect req is already in flight.
-      if (!handshakeDone && msg?.type === 'event' && msg.event === 'connect.challenge') {
-        return
-      }
-
-      // Handshake response
-      if (!handshakeDone && msg?.type === 'res' && msg.id === reqId) {
-        if (msg.ok) {
-          handshakeDone = true
-          gatewayWsReady = true
-          console.log('[chat-ws] handshake OK')
-          resolve()
-        } else {
-          const err = msg.error?.message || 'Gateway connect rejected'
-          console.warn('[chat-ws] handshake rejected:', err)
-          reject(new Error(err))
-          ws.close()
-        }
-        return
-      }
-
-      // Request responses
-      if (msg?.type === 'res' && gwPendingRequests.has(msg.id)) {
-        const p = gwPendingRequests.get(msg.id)
-        gwPendingRequests.delete(msg.id)
-        if (msg.ok) p.resolve(msg.result)
-        else p.reject(new Error(msg.error?.message || 'Gateway request failed'))
-        return
-      }
-
-      // Agent events (chat streaming)
-      if (msg?.type === 'event' && msg.event === 'agent') {
-        const payload = msg.payload
-        const sk = payload?.sessionKey
-        if (sk && gwAgentListeners.has(sk)) {
-          for (const fn of gwAgentListeners.get(sk)) {
-            try { fn(payload) } catch {}
+  gatewayClient = new GatewayClient({
+    url: getGatewayWsUrl(settings.gatewayUrl),
+    token: settings.token,
+    clientName: 'webchat',
+    onEvent: (evt) => {
+      if (evt.event === 'agent') {
+        const sk = evt.payload?.sessionKey
+        if (sk && agentListeners.has(sk)) {
+          for (const fn of agentListeners.get(sk)) {
+            try { fn(evt.payload) } catch {}
           }
         }
-        return
       }
-
-      // ping
-      if (msg?.method === 'ping') {
-        try { ws.send(JSON.stringify({ method: 'pong' })) } catch {}
+    },
+    onClose: () => {
+      // Notify all waiting listeners that WS dropped
+      for (const [, fns] of agentListeners) {
+        for (const fn of fns) { try { fn(null) } catch {} }
       }
-    }
-
-    ws.onopen = () => {
-      console.log('[chat-ws] connected to', gatewayWsUrl(settings))
-      // Send connect immediately on open with full operator scopes
-      reqId = `chat-${Date.now()}`
-      ws.send(JSON.stringify({
-        type: 'req', id: reqId, method: 'connect',
-        params: {
-          minProtocol: 3, maxProtocol: 3,
-          client: { id: 'webchat', version: '0.4.0', platform: 'chrome-extension', mode: 'webchat' },
-          role: 'operator', scopes: ['operator.admin', 'operator.read', 'operator.write', 'operator.approvals', 'operator.pairing'],
-          caps: [], commands: [],
-          auth: { token: settings.token },
-        },
-      }))
-    }
-
-    ws.onerror = (e) => {
-      console.warn('[chat-ws] error', e)
-      if (!handshakeDone) reject(new Error('Gateway WebSocket connect failed'))
-      onGatewayWsClosed()
-    }
-
-    ws.onclose = (ev) => {
-      console.log('[chat-ws] closed', ev.code, ev.reason)
-      if (!handshakeDone) reject(new Error('Gateway WebSocket closed before handshake'))
-      onGatewayWsClosed()
-    }
-
-    setTimeout(() => {
-      if (!handshakeDone) {
-        reject(new Error('Gateway handshake timeout'))
-        ws.close()
-      }
-    }, 8000)
-  }).finally(() => { gwConnectPromise = null })
-
-  return gwConnectPromise
-}
-
-function onGatewayWsClosed() {
-  if (gatewayWs) { try { gatewayWs.close() } catch {} }
-  gatewayWs = null
-  gatewayWsReady = false
-  // Reject all pending requests
-  for (const [, p] of gwPendingRequests) p.reject(new Error('Gateway WS disconnected'))
-  gwPendingRequests.clear()
-  // Notify all agent listeners (empty payload = disconnected)
-  for (const [, fns] of gwAgentListeners) {
-    for (const fn of fns) { try { fn(null) } catch {} }
-  }
-  gwAgentListeners.clear()
-}
-
-function gwRequest(method, params) {
-  return new Promise((resolve, reject) => {
-    if (!gatewayWs || !gatewayWsReady) return reject(new Error('Gateway WS not connected'))
-    const id = `req-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    gwPendingRequests.set(id, { resolve, reject })
-    setTimeout(() => {
-      if (gwPendingRequests.has(id)) {
-        gwPendingRequests.delete(id)
-        reject(new Error('Gateway request timeout'))
-      }
-    }, 30000)
-    gatewayWs.send(JSON.stringify({ type: 'req', id, method, params }))
+      agentListeners.clear()
+    },
   })
+  gatewayClient.start()
+
+  // Wait for connect to complete (up to 10s)
+  await new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('gateway connect timeout')), 10000)
+    const orig = gatewayClient.opts.onHello
+    gatewayClient.opts.onHello = (res) => {
+      clearTimeout(t)
+      orig?.(res)
+      resolve()
+    }
+    const origClose = gatewayClient.opts.onClose
+    gatewayClient.opts.onClose = (info) => {
+      clearTimeout(t)
+      origClose?.(info)
+      reject(new Error(`gateway closed during connect (${info.code})`))
+    }
+  })
+
+  return gatewayClient
 }
 
-function subscribeAgentEvents(sessionKey, fn) {
-  if (!gwAgentListeners.has(sessionKey)) gwAgentListeners.set(sessionKey, new Set())
-  gwAgentListeners.get(sessionKey).add(fn)
+function subscribeAgent(sessionKey, fn) {
+  if (!agentListeners.has(sessionKey)) agentListeners.set(sessionKey, new Set())
+  agentListeners.get(sessionKey).add(fn)
   return () => {
-    const fns = gwAgentListeners.get(sessionKey)
-    if (fns) { fns.delete(fn); if (!fns.size) gwAgentListeners.delete(sessionKey) }
+    const fns = agentListeners.get(sessionKey)
+    if (fns) { fns.delete(fn); if (!fns.size) agentListeners.delete(sessionKey) }
   }
 }
 
-// ─── Chat: long-lived port for WS streaming ───────────────────────────────────
+// ─── Chat: long-lived port ────────────────────────────────────────────────────
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'chat') {
@@ -205,7 +273,7 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 })
 
-// ─── Chat streaming via Gateway WS ────────────────────────────────────────────
+// ─── Chat streaming via gateway WS (webchat protocol) ────────────────────────
 
 async function handleChatStream(port, msg) {
   const { messages, text, settings, sessionKey } = msg
@@ -217,70 +285,71 @@ async function handleChatStream(port, msg) {
     if (unsubscribe) unsubscribe()
   })
 
+  // Connect / reuse gateway WS
+  let client
   try {
-    await ensureGatewayWs(settings)
+    client = await ensureGatewayClient(settings)
   } catch (e) {
     port.postMessage({ type: 'ERROR', message: `Gateway connect failed: ${e.message}` })
     return
   }
-
   if (aborted) return
 
   const agentId = settings.agentId || 'main'
   const chatMessages = messages || [{ role: 'user', content: text }]
   const lastMsg = chatMessages[chatMessages.length - 1]
-
-  // Build idempotency key
+  const msgText = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content)
   const idempotencyKey = `ext-${Date.now()}-${Math.random().toString(36).slice(2)}`
 
-  // Subscribe to agent events for this session before sending
   let started = false
   let doneReceived = false
+  let safetyTimer = null
 
-  unsubscribe = subscribeAgentEvents(sessionKey, (payload) => {
+  const finish = (type) => {
+    if (safetyTimer) { clearTimeout(safetyTimer); safetyTimer = null }
+    if (unsubscribe) { unsubscribe(); unsubscribe = null }
+    port.postMessage({ type })
+  }
+
+  // Subscribe to agent events for this session
+  unsubscribe = subscribeAgent(sessionKey, (payload) => {
     if (aborted) return
+
     if (payload === null) {
-      // WS disconnected
+      // WS dropped
       if (!doneReceived) port.postMessage({ type: 'ERROR', message: 'Gateway disconnected' })
       return
     }
 
     const kind = payload?.kind
-    const text = payload?.text ?? payload?.delta ?? payload?.chunk ?? ''
+    const delta = payload?.text ?? payload?.delta ?? ''
 
-    if (!started && kind === 'text' && text) {
-      started = true
-      port.postMessage({ type: 'START' })
-    }
-
-    if (kind === 'text' && text) {
+    if (kind === 'text' && delta) {
       if (!started) { started = true; port.postMessage({ type: 'START' }) }
-      port.postMessage({ type: 'DELTA', delta: text })
+      port.postMessage({ type: 'DELTA', delta })
       return
     }
 
     if (kind === 'done' || kind === 'end' || payload?.status === 'done') {
       doneReceived = true
-      if (unsubscribe) { unsubscribe(); unsubscribe = null }
-      if (started) port.postMessage({ type: 'DONE' })
-      else { port.postMessage({ type: 'START' }); port.postMessage({ type: 'DONE' }) }
+      if (!started) { started = true; port.postMessage({ type: 'START' }) }
+      finish('DONE')
       return
     }
 
     if (kind === 'error') {
-      if (unsubscribe) { unsubscribe(); unsubscribe = null }
+      finish('ERROR')
       port.postMessage({ type: 'ERROR', message: payload?.message || 'Agent error' })
       return
     }
   })
 
-  // Send the message via chat.send
+  // Send the message
   try {
-    await gwRequest('chat.send', {
-      to: agentId,
-      message: typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content),
+    await client.request('chat.send', {
       sessionKey,
-      agentId,
+      message: msgText,
+      deliver: false,
       idempotencyKey,
     })
   } catch (e) {
@@ -289,12 +358,9 @@ async function handleChatStream(port, msg) {
     return
   }
 
-  // Start a safety timeout — if no done event in 3 minutes, finish
-  setTimeout(() => {
-    if (!doneReceived && !aborted) {
-      if (unsubscribe) { unsubscribe(); unsubscribe = null }
-      port.postMessage({ type: 'DONE' })
-    }
+  // Safety timeout: 3 minutes
+  safetyTimer = setTimeout(() => {
+    if (!doneReceived && !aborted) finish('DONE')
   }, 180000)
 }
 
@@ -327,6 +393,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'RELAY_STATUS_GET') {
     sendResponse({ connected: relay.getRelayConnected(), attachedTabs: relay.getAttachedTabCount() })
     return false
+  }
+
+  // Expose sessions.list via WS for side panel
+  if (msg.type === 'SESSIONS_LIST') {
+    getSettings().then(async (settings) => {
+      try {
+        const client = await ensureGatewayClient(settings)
+        const result = await client.request('sessions.list', msg.params || {})
+        sendResponse({ ok: true, result })
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message })
+      }
+    })
+    return true
   }
 })
 
@@ -379,9 +459,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 const initPromise = relay.rehydrateRelayState().then(async () => {
   const s = await getSettings()
-  // Pre-connect gateway WS if token is configured
   if (s.token) {
-    ensureGatewayWs(s).catch(e => console.warn('[chat-ws] pre-connect failed:', e.message))
+    ensureGatewayClient(s).catch(e => console.warn('[gateway-ws] pre-connect failed:', e.message))
   }
   if (s.token && relay.getAttachedTabCount() > 0) {
     await relay.autoStartRelay(s.gatewayUrl, s.token)
